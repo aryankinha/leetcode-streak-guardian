@@ -119,7 +119,13 @@ async function hasSolvedToday(username) {
 
   const submissions = await fetchRecentAcceptedSubmissions(username);
   const resetEpoch = getTodayResetEpochSeconds();
-  const solved = submissions.some((s) => isSubmissionAfterReset(s, resetEpoch));
+  const actualSolved = submissions.some((s) => isSubmissionAfterReset(s, resetEpoch));
+
+  if (process.env.FORCE_LOGIN_TEST === "true") {
+    log("DEBUG", "FORCE_LOGIN_TEST enabled: bypassing solvedToday check");
+  }
+
+  const solved = process.env.FORCE_LOGIN_TEST === "true" ? false : actualSolved;
 
   return {
     solved,

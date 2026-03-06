@@ -93,7 +93,7 @@ async function runGuardianCycle(runId) {
   if (shouldSendStartupMessage()) {
     await notifyType(
       "INFO",
-      "LeetCode Streak Guardian is live on Render. If you have already solved today, monitoring is working."
+      "LeetCode Streak Guardian is live☺️. If you have already solved today, monitoring is working."
     );
     markStartupMessageSent();
   }
