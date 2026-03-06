@@ -32,3 +32,4 @@ jobs:
           LEETCODE_PASSWORD: ${{ secrets.LEETCODE_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_LOGIN_TEST: ${{ secrets.FORCE_LOGIN_TEST }}
