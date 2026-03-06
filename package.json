@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/index.js",
+    "generate:session": "node scripts/generateSession.js",
     "install:browsers": "npx playwright install chromium"
   },
   "dependencies": {

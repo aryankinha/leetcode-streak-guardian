@@ -9,6 +9,7 @@ function buildDefaultState() {
   return {
     dayKey: getCurrentLeetCodeDayKey(),
     startupMessageSent: false,
+    sessionIssueAlertSent: false,
     lastReminderAt: null,
     lastAutoSubmitAt: null,
     lastReminderStage: null,
@@ -40,6 +41,7 @@ function normalizeStateForDay(state) {
   const resetState = {
     ...state,
     dayKey: currentDayKey,
+    sessionIssueAlertSent: false,
     lastReminderAt: null,
     lastAutoSubmitAt: null,
     lastReminderStage: null
@@ -59,16 +61,14 @@ function getMinutesSinceMidnightIst(date = nowIst()) {
 
 function getReminderStage(minutes) {
   const m = minutes;
-  const sixPm = 18 * 60;
   const eightPm = 20 * 60;
   const tenPm = 22 * 60;
   const oneAm = 60;
   const twoAm = 120;
   const reset = 330;
 
-  if (m >= sixPm && m < eightPm) return { stage: "first", interval: null };
   if (m >= eightPm && m < tenPm) return { stage: "hourly", interval: 60 };
-  if ((m >= tenPm && m < 24 * 60) || (m >= 0 && m < oneAm)) return { stage: "every15", interval: 15 };
+  if ((m >= tenPm && m < 24 * 60) || (m >= 0 && m < oneAm)) return { stage: "every30", interval: 30 };
   if (m >= oneAm && m < twoAm) return { stage: "every5", interval: 5 };
   if (m >= twoAm && m < reset) return { stage: "emergency", interval: 5 };
 
@@ -77,17 +77,9 @@ function getReminderStage(minutes) {
 
 function shouldSendReminder(currentStage, state, now = new Date()) {
   if (currentStage.stage === "quiet") return false;
-
-  if (!state.lastReminderAt) {
-    return true;
-  }
+  if (!state.lastReminderAt) return true;
 
   const minutesSince = (now.getTime() - new Date(state.lastReminderAt).getTime()) / 60000;
-
-  if (currentStage.stage === "first") {
-    return state.lastReminderStage !== "first";
-  }
-
   if (!currentStage.interval) return false;
   return minutesSince >= currentStage.interval;
 }
@@ -157,6 +149,17 @@ function markStartupMessageSent() {
   writeState(state);
 }
 
+function shouldSendSessionIssueAlert() {
+  const state = readState();
+  return !state.sessionIssueAlertSent;
+}
+
+function markSessionIssueAlertSent() {
+  const state = readState();
+  state.sessionIssueAlertSent = true;
+  writeState(state);
+}
+
 module.exports = {
   runReminderEscalation,
   markAutoSubmit,
@@ -164,6 +167,8 @@ module.exports = {
   markCheckNow,
   shouldSendStartupMessage,
   markStartupMessageSent,
+  shouldSendSessionIssueAlert,
+  markSessionIssueAlertSent,
   readState,
   writeState,
   getReminderStage,

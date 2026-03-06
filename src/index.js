@@ -9,6 +9,8 @@ const {
   markCheckNow,
   shouldSendStartupMessage,
   markStartupMessageSent,
+  shouldSendSessionIssueAlert,
+  markSessionIssueAlertSent,
   readState,
   getReminderStage,
   getMinutesSinceMidnightIst
@@ -91,30 +93,36 @@ async function runGuardianCycle(runId) {
   markCheckNow(runId);
 
   if (shouldSendStartupMessage()) {
-    await notifyType(
-      "INFO","LeetCode Streak Guardian is live☺️. If you have already solved today, monitoring is working."
-    );
+    await notifyType("INFO", "LeetCode Streak Guardian is live. Monitoring has started.");
     markStartupMessageSent();
   }
 
   log("INFO", "checking submissions", { runId });
 
   try {
+    const sessionStatus = await withRetry(() => ensureSessionReady(), "Session validation", 2);
+    if (!sessionStatus.ok) {
+      log("WARN", "Session validation failed, stopping automation for this run", { runId, reason: sessionStatus.reason });
+      if (shouldSendSessionIssueAlert()) {
+        await notifyType(
+          "SESSION_EXPIRED",
+          "LeetCode session expired.\n\nAutomation cannot continue.\nPlease regenerate session cookies."
+        );
+        markSessionIssueAlertSent();
+      }
+      return { ok: true, solved: false, authBlocked: true };
+    }
+
+    log("INFO", "session loaded", { runId });
     const result = await withRetry(() => hasSolvedToday(config.leetcode.username), "Submission check", 3);
 
     if (result.solved) {
-      log("INFO", "solved today", { runId, dayKey: result.dayKey });
+      log("INFO", "submission detected", { runId, dayKey: result.dayKey });
       return { ok: true, solved: true };
     }
 
     log("WARN", "No accepted submission found after reset time", { runId, dayKey: result.dayKey });
     const reminder = await runReminderEscalation();
-
-    const sessionStatus = await withRetry(() => ensureSessionReady(), "Session validation", 2);
-    if (!sessionStatus.ok) {
-      log("WARN", "Session could not be refreshed", { runId, reason: sessionStatus.reason });
-      await notifyType("LOGIN_REQUIRED", `Session refresh failed (${sessionStatus.reason}). Manual login may be required.`);
-    }
 
     if (reminder.shouldAutoSubmit && shouldRetryAutoSubmit()) {
       const submitResult = await withRetry(() => tryAutoSubmit(), "Auto submit", 2);

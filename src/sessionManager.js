@@ -1,10 +1,7 @@
-const fs = require("fs");
 const { chromium } = require("playwright-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-const { config, log } = require("./config");
-const { actHuman, humanType, randomDelay, randomInt } = require("./humanBehavior");
-const { detectCaptcha } = require("./captchaHandler");
-const { notifyType } = require("./telegramNotifier");
+const { log } = require("./config");
+const { randomInt } = require("./humanBehavior");
 
 chromium.use(StealthPlugin());
 
@@ -40,17 +37,6 @@ function isLikelyTransient(error) {
   );
 }
 
-function hasValidSessionFile() {
-  try {
-    if (!fs.existsSync(config.paths.SESSION_PATH)) return false;
-    const raw = fs.readFileSync(config.paths.SESSION_PATH, "utf8");
-    const parsed = JSON.parse(raw || "{}");
-    return Array.isArray(parsed.cookies) && Array.isArray(parsed.origins);
-  } catch {
-    return false;
-  }
-}
-
 function createStealthContext(browser, extraOptions = {}) {
   const viewport = { width: randomInt(1280, 1680), height: randomInt(720, 980) };
   const userAgent = USER_AGENTS[randomInt(0, USER_AGENTS.length - 1)];
@@ -61,6 +47,23 @@ function createStealthContext(browser, extraOptions = {}) {
     timezoneId: "Asia/Kolkata",
     ...extraOptions
   });
+}
+
+function parseStorageStateFromEnv() {
+  const raw = process.env.LEETCODE_STORAGE_STATE;
+  if (!raw || !raw.trim()) {
+    return { ok: false, reason: "session_missing" };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.cookies) || !Array.isArray(parsed.origins)) {
+      return { ok: false, reason: "session_invalid" };
+    }
+    return { ok: true, storageState: parsed };
+  } catch {
+    return { ok: false, reason: "session_invalid_json" };
+  }
 }
 
 async function isLoggedIn(page, context) {
@@ -79,76 +82,28 @@ async function isLoggedIn(page, context) {
   return !redirectedToLogin && hasSessionCookie && (avatarVisible || !signInVisible);
 }
 
-async function performLogin(page, context) {
-  log("INFO", "performing login");
-  await notifyType("LOGIN_REQUIRED", "Session expired. Attempting automated login refresh.");
-
-  await page.goto(config.leetcode.loginUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
-  await actHuman(page);
-
-  if (await detectCaptcha(page, "login page")) {
-    return { ok: false, reason: "captcha_detected" };
-  }
-
-  const emailInput = page.locator('input[name="login"], input#id_login, input[type="email"]').first();
-  const passwordInput = page.locator('input[name="password"], input#id_password, input[type="password"]').first();
-  const loginButton = page.locator('button[type="submit"], button:has-text("Sign In"), button:has-text("Log In")').first();
-
-  await emailInput.waitFor({ timeout: 12000 });
-  await emailInput.click({ timeout: 10000 });
-  await humanType(emailInput, config.leetcode.email);
-  await randomDelay(page, 400, 1300);
-
-  await passwordInput.waitFor({ timeout: 12000 });
-  await passwordInput.click({ timeout: 10000 });
-  await humanType(passwordInput, config.leetcode.password);
-  await randomDelay(page, 900, 2000);
-
-  await Promise.all([
-    page.waitForLoadState("domcontentloaded", { timeout: 60000 }),
-    loginButton.click({ timeout: 10000 })
-  ]);
-  await page.waitForTimeout(2500);
-
-  if (await detectCaptcha(page, "post-login")) {
-    return { ok: false, reason: "captcha_detected" };
-  }
-
-  const loggedIn = await isLoggedIn(page, context);
-  if (!loggedIn) {
-    await notifyType("LOGIN_REQUIRED", "Login refresh failed. Please verify credentials or complete login manually.");
-    return { ok: false, reason: "login_failed" };
-  }
-
-  await context.storageState({ path: config.paths.SESSION_PATH });
-  log("INFO", "Session refreshed and saved", { sessionPath: config.paths.SESSION_PATH });
-  return { ok: true };
-}
-
 async function ensureAuthenticatedPage() {
   let browser;
 
   try {
+    const storageStateResult = parseStorageStateFromEnv();
+    if (!storageStateResult.ok) {
+      log("WARN", "LeetCode session missing or invalid", { reason: storageStateResult.reason });
+      return { ok: false, reason: storageStateResult.reason };
+    }
+
     browser = await launchBrowser();
-    const contextOptions = hasValidSessionFile() ? { storageState: config.paths.SESSION_PATH } : {};
-    const context = await createStealthContext(browser, contextOptions);
+    const context = await createStealthContext(browser, { storageState: storageStateResult.storageState });
     const page = await context.newPage();
 
     const loggedIn = await isLoggedIn(page, context);
-    if (loggedIn) {
-      return { ok: true, browser, context, page, refreshed: false };
-    }
-
-    log("WARN", "session expired or missing");
-    await notifyType("SESSION_EXPIRED", "Session expired or missing. Starting login refresh.");
-
-    const loginResult = await performLogin(page, context);
-    if (!loginResult.ok) {
+    if (!loggedIn) {
+      log("WARN", "LeetCode session appears expired");
       await browser.close();
-      return { ok: false, reason: loginResult.reason };
+      return { ok: false, reason: "session_expired" };
     }
 
-    return { ok: true, browser, context, page, refreshed: true };
+    return { ok: true, browser, context, page };
   } catch (error) {
     if (browser) {
       await browser.close();
@@ -158,7 +113,6 @@ async function ensureAuthenticatedPage() {
     if (isLikelyTransient(error)) {
       throw makeRetryableError("Transient error while initializing session", error);
     }
-
     return { ok: false, reason: "session_init_failed", error: error.message };
   }
 }
@@ -174,7 +128,7 @@ async function ensureSessionReady() {
   if (!resources.ok) return resources;
 
   await closeAuthenticatedResources(resources);
-  return { ok: true, refreshed: resources.refreshed };
+  return { ok: true };
 }
 
 module.exports = {

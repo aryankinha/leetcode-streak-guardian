@@ -6,13 +6,11 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const LOGS_DIR = path.resolve(ROOT_DIR, "logs");
-const RUNTIME_DIR = path.resolve(ROOT_DIR, "runtime");
-const SESSION_PATH = path.resolve(RUNTIME_DIR, "session.json");
 const STATE_PATH = path.resolve(LOGS_DIR, "runtimeState.json");
 const LOCK_FILE_PATH = path.resolve(LOGS_DIR, "guardian.lock");
 const LOG_FILE_PATH = path.resolve(LOGS_DIR, `guardian-${new Date().toISOString().slice(0, 10)}.log`);
 
-for (const dir of [LOGS_DIR, RUNTIME_DIR]) {
+for (const dir of [LOGS_DIR]) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -32,10 +30,7 @@ const config = {
   lockStaleMinutes: toPositiveNumber(process.env.LOCK_STALE_MINUTES, 25),
   leetcode: {
     username: process.env.LEETCODE_USERNAME,
-    email: process.env.LEETCODE_EMAIL,
-    password: process.env.LEETCODE_PASSWORD,
-    graphqlUrl: "https://leetcode.com/graphql",
-    loginUrl: "https://leetcode.com/accounts/login/"
+    graphqlUrl: "https://leetcode.com/graphql"
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
@@ -44,8 +39,6 @@ const config = {
   paths: {
     ROOT_DIR,
     LOGS_DIR,
-    RUNTIME_DIR,
-    SESSION_PATH,
     STATE_PATH,
     LOCK_FILE_PATH,
     LOG_FILE_PATH
@@ -75,8 +68,8 @@ function validateConfig() {
     fatalErrors.push("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required");
   }
 
-  if (!config.leetcode.email || !config.leetcode.password) {
-    fatalErrors.push("LEETCODE_EMAIL and LEETCODE_PASSWORD are required for self-healing session login");
+  if (!process.env.LEETCODE_STORAGE_STATE || !process.env.LEETCODE_STORAGE_STATE.trim()) {
+    fatalErrors.push("LEETCODE_STORAGE_STATE is required");
   }
 
   return { fatalErrors, warnings };

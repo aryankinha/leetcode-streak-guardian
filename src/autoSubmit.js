@@ -1,7 +1,6 @@
 const { config, log } = require("./config");
 const { actHuman, randomDelay, randomInt } = require("./humanBehavior");
 const { notifyType } = require("./telegramNotifier");
-const { detectCaptcha } = require("./captchaHandler");
 const {
   ensureAuthenticatedPage,
   closeAuthenticatedResources,
@@ -57,10 +56,6 @@ async function tryAutoSubmit() {
     const problemUrl = pickProblemUrl();
     await page.goto(problemUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
     await actHuman(page);
-
-    if (await detectCaptcha(page, "auto-submit")) {
-      return { ok: false, reason: "captcha_detected" };
-    }
 
     const editorReady = await page
       .locator('[class*="monaco" i], [data-cy="code-area"], textarea')

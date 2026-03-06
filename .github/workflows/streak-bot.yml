@@ -28,8 +28,6 @@ jobs:
         run: node src/index.js
         env:
           LEETCODE_USERNAME: ${{ secrets.LEETCODE_USERNAME }}
-          LEETCODE_EMAIL: ${{ secrets.LEETCODE_EMAIL }}
-          LEETCODE_PASSWORD: ${{ secrets.LEETCODE_PASSWORD }}
+          LEETCODE_STORAGE_STATE: ${{ secrets.LEETCODE_STORAGE_STATE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FORCE_LOGIN_TEST: ${{ secrets.FORCE_LOGIN_TEST }}
