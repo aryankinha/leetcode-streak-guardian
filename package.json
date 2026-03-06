@@ -1,0 +1,19 @@
+{
+  "name": "leetcode-streak-guardian",
+  "version": "1.0.0",
+  "description": "Render cron service to protect LeetCode streak with reminders and emergency auto-submit.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "install:browsers": "npx playwright install chromium"
+  },
+  "dependencies": {
+    "axios": "^1.8.2",
+    "dotenv": "^16.4.7",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.51.1",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
