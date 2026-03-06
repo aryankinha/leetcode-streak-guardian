@@ -125,7 +125,7 @@ async function hasSolvedToday(username) {
     log("DEBUG", "FORCE_LOGIN_TEST enabled: bypassing solvedToday check");
   }
 
-  const solved = process.env.FORCE_LOGIN_TEST === "true" ? false : actualSolved;
+  const solved = false  
 
   return {
     solved,
