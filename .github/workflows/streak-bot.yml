@@ -5,6 +5,11 @@ on:
     - cron: "*/10 * * * *"
   workflow_dispatch:
 
+# Prevent multiple runs overlapping
+concurrency:
+  group: leetcode-streak-guardian
+  cancel-in-progress: true
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -13,17 +18,31 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      # Setup Node with built-in npm cache
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
+          cache: "npm"
 
+      # Cache Playwright browser binaries
+      - name: Cache Playwright Browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      # Install dependencies
       - name: Install Dependencies
         run: npm install
 
+      # Install Playwright browsers (skips download if cached)
       - name: Install Playwright Browsers
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
+      # Run the bot
       - name: Run Streak Guardian
         run: node src/index.js
         env:
