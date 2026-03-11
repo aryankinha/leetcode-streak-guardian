@@ -71,23 +71,7 @@ async function executeGraphql(query, variables, retries = 3) {
   return {};
 }
 
-async function fetchRecentAcceptedSubmissions(username) {
-  const query = `
-    query recentAcSubmissions($username: String!) {
-      recentAcSubmissionList(username: $username) {
-        id
-        title
-        titleSlug
-        timestamp
-      }
-    }
-  `;
-
-  const data = await executeGraphql(query, { username }, 3);
-  return data.recentAcSubmissionList || [];
-}
-
-async function fetchRecentSubmissionsAnyStatus(username) {
+async function fetchRecentSubmissions(username) {
   const query = `
     query recentSubmissions($username: String!) {
       recentSubmissionList(username: $username) {
@@ -99,50 +83,29 @@ async function fetchRecentSubmissionsAnyStatus(username) {
     }
   `;
 
-  try {
-    const data = await executeGraphql(query, { username }, 2);
-    return data.recentSubmissionList || [];
-  } catch (error) {
-    log("WARN", "Unable to fetch non-AC submission list", { error: error.message });
-    return [];
-  }
+  const data = await executeGraphql(query, { username }, 3);
+  return data.recentSubmissionList || [];
 }
 
 function isSubmissionAfterReset(submission, resetEpoch) {
   return Number(submission?.timestamp) >= resetEpoch;
 }
 
-async function hasSolvedToday(username) {
-  if (!username) {
-    throw new Error("LEETCODE_USERNAME is required");
-  }
-
-  const submissions = await fetchRecentAcceptedSubmissions(username);
-  const resetEpoch = getTodayResetEpochSeconds();
-  const actualSolved = submissions.some((s) => isSubmissionAfterReset(s, resetEpoch));
-
-  if (process.env.FORCE_LOGIN_TEST === "true") {
-    log("DEBUG", "FORCE_LOGIN_TEST enabled: bypassing solvedToday check");
-  }
-
-  const solved = process.env.FORCE_LOGIN_TEST === "true" ? false : actualSolved;
-
-  return {
-    solved,
-    resetEpoch,
-    submissions,
-    dayKey: getCurrentLeetCodeDayKey()
-  };
+function getLatestSubmittedProblemSlug(submissions) {
+  const latestWithSlug = [...submissions]
+    .filter((submission) => typeof submission?.titleSlug === "string" && submission.titleSlug.trim())
+    .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))[0];
+  return latestWithSlug ? latestWithSlug.titleSlug.trim() : "two-sum";
 }
 
-async function hasSubmittedTodayAnyStatus(username) {
+async function hasSubmittedToday(username) {
   if (!username) {
     throw new Error("LEETCODE_USERNAME is required");
   }
 
-  const submissions = await fetchRecentSubmissionsAnyStatus(username);
+  const submissions = await fetchRecentSubmissions(username);
   const resetEpoch = getTodayResetEpochSeconds();
-  const submitted = submissions.some((s) => isSubmissionAfterReset(s, resetEpoch));
+  const submitted = submissions.some((submission) => isSubmissionAfterReset(submission, resetEpoch));
 
   return {
     submitted,
@@ -153,9 +116,9 @@ async function hasSubmittedTodayAnyStatus(username) {
 }
 
 module.exports = {
-  hasSolvedToday,
-  hasSubmittedTodayAnyStatus,
-  fetchRecentAcceptedSubmissions,
+  hasSubmittedToday,
+  fetchRecentSubmissions,
+  getLatestSubmittedProblemSlug,
   getTodayResetEpochSeconds,
   getCurrentLeetCodeDayKey
 };

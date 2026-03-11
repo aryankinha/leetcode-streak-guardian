@@ -1,83 +1,124 @@
 # leetcode-streak-guardian
 
-Node.js + Playwright service that protects a LeetCode streak using submission checks, reminder escalation, and emergency auto-submit.
+LeetCode Streak Guardian runs on a schedule and protects streaks by checking daily submissions, sending progressive reminders, and attempting an emergency auto-submit after 2 AM IST.
 
-## Setup
+## Core Architecture
 
-```bash
-cd leetcode-streak-guardian
-npm install
-cp .env.example .env
-# Fill .env values
+```text
+GitHub Action (every 10 min)
+  -> check submissions (GraphQL recentSubmissionList)
+  -> submitted today? yes -> exit
+  -> no -> reminder engine
+  -> after 2 AM IST -> playwright submit
+```
+
+## Project Structure
+
+```text
+src/
+  index.js
+  config.js
+  leetcodeApi.js
+  reminderEngine.js
+  playwrightSubmit.js
+  telegramNotifier.js
+scripts/
+  generateSession.js
 ```
 
 ## Authentication Setup (Session Only)
 
-This project does not perform automated login in CI.
-It uses a pre-authenticated Playwright storage state from `LEETCODE_STORAGE_STATE`.
+This project never performs automated email/password login in CI.
+Authentication uses `LEETCODE_STORAGE_STATE` only.
 
-1. Generate a session locally:
+1. Generate session locally:
 
 ```bash
 npm run generate:session
 ```
 
-Complete manual login in the opened browser and press Enter in terminal.
-This produces `session.json` in project root.
+Login manually in the opened browser, then press Enter in terminal.
+This creates `session.json`.
 
-2. Upload session to GitHub Secrets:
+2. Add GitHub Secret:
 
-- Open repository `Settings -> Secrets and variables -> Actions`
-- Create secret: `LEETCODE_STORAGE_STATE`
-- Paste the full contents of `session.json`
+- Settings -> Secrets and variables -> Actions
+- Secret name: `LEETCODE_STORAGE_STATE`
+- Value: full contents of `session.json`
 
 3. Runtime behavior:
 
-- GitHub Actions loads `LEETCODE_STORAGE_STATE`
-- Playwright starts with that session
-- If session is missing/invalid/expired, automation stops and Telegram alert is sent once per day
+- If session missing/invalid/expired -> one Telegram alert per day, automation stops for the run.
+- No login retries, no credential form automation.
 
-## Run locally
+## Environment Variables
 
-```bash
-npm run install:browsers
-npm start
-```
+Required:
 
-By default, it runs one guardian cycle and exits (`USE_INTERNAL_CRON=false`).
+- `LEETCODE_USERNAME`
+- `LEETCODE_STORAGE_STATE`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-## Render / GitHub Cron Settings
+Optional:
 
-- Build command:
-
-```bash
-npm install && npx playwright install chromium
-```
-
-- Start command:
-
-```bash
-node src/index.js
-```
-
-- Schedule:
-
-```cron
-*/10 * * * *
-```
+- `CHECK_INTERVAL` (default `10`)
+- `USE_INTERNAL_CRON` (default `false`)
+- `AUTO_SUBMIT_RETRY_MINUTES` (default `15`)
+- `LOCK_STALE_MINUTES` (default `25`)
 
 ## Reminder Schedule (IST)
 
 - Before 8 PM: no reminders
-- 8 PM to 10 PM: hourly reminders
-- 10 PM to 1 AM: reminders every 30 minutes
-- 1 AM to 2 AM: reminders every 5 minutes
-- 2 AM onward: auto-submit window with 5-minute risk reminders
+- 8 PM to 10 PM: every hour
+- 10 PM to 1 AM: every 30 minutes
+- 1 AM to 2 AM: every 5 minutes
+- 2 AM onward: emergency stage + auto-submit attempts
 
-## Notes
+## Dynamic Problem Selection
 
-- Main solved-check uses LeetCode GraphQL `recentAcSubmissionList`.
-- Post auto-submit verification also checks non-AC submission activity.
-- Auto-submit picks a problem from internal fallback URLs.
-- Logs are written to `logs/`.
-- Runtime reminder state is saved at `logs/runtimeState.json`.
+Auto-submit does not use a fixed hardcoded problem only.
+It fetches `recentSubmissionList` and selects the latest `titleSlug`:
+
+- if latest submission exists: `https://leetcode.com/problems/<titleSlug>/`
+- if unavailable: fallback to `https://leetcode.com/problems/two-sum/`
+
+## Submit Reliability
+
+Playwright auto-submit flow:
+
+1. Launch browser with session storage state
+2. Open selected problem page
+3. Wait for editor (`.monaco-editor`, `[data-cy=\"code-area\"]`, `textarea`)
+4. Find submit button using fallback selectors:
+   - `[data-e2e-locator=\"console-submit-button\"]`
+   - `[data-cy=\"submit-code-btn\"]`
+   - `button:has-text(\"Submit\")`
+   - `button:has-text(\"Submit Code\")`
+5. Ensure button is visible and enabled, scroll into view, apply human-like delay
+6. Click submit and detect result via network (`POST /submit/`) or verdict text
+
+## GitHub Actions
+
+Workflow should pass only:
+
+- `LEETCODE_USERNAME`
+- `LEETCODE_STORAGE_STATE`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+## Commands
+
+Install and run once:
+
+```bash
+npm install
+npm run install:browsers
+npm start
+```
+
+Generate session:
+
+```bash
+npm run generate:session
+```

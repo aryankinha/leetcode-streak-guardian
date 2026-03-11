@@ -8,8 +8,6 @@ const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
 function buildDefaultState() {
   return {
     dayKey: getCurrentLeetCodeDayKey(),
-    startupMessageSent: false,
-    sessionIssueAlertSent: false,
     lastReminderAt: null,
     lastAutoSubmitAt: null,
     lastReminderStage: null,
@@ -41,7 +39,6 @@ function normalizeStateForDay(state) {
   const resetState = {
     ...state,
     dayKey: currentDayKey,
-    sessionIssueAlertSent: false,
     lastReminderAt: null,
     lastAutoSubmitAt: null,
     lastReminderStage: null
@@ -93,14 +90,13 @@ function formatIstTime(date = nowIst()) {
 async function runReminderEscalation() {
   const state = readState();
   const now = new Date();
-  const minutes = getMinutesSinceMidnightIst();
-  const stage = getReminderStage(minutes);
+  const stage = getReminderStage(getMinutesSinceMidnightIst());
 
   if (!shouldSendReminder(stage, state, now)) {
     return { state, stage, shouldAutoSubmit: stage.stage === "emergency" };
   }
 
-  let message = `⚠️ You haven't solved a LeetCode problem today.\n\nCurrent time: ${formatIstTime()}\nYour streak is at risk. Solve a problem now.`;
+  let message = `⚠️ You haven't submitted a LeetCode problem today.\nYour streak may break.\nCurrent time: ${formatIstTime()}.`;
   let type = "INFO";
 
   if (stage.stage === "every5" || stage.stage === "emergency") {
@@ -112,7 +108,7 @@ async function runReminderEscalation() {
   state.lastReminderAt = now.toISOString();
   state.lastReminderStage = stage.stage;
   writeState(state);
-  log("INFO", "Reminder notification sent", { stage: stage.stage });
+  log("INFO", "triggering reminder", { stage: stage.stage });
 
   return { state, stage, shouldAutoSubmit: stage.stage === "emergency" };
 }
@@ -138,37 +134,11 @@ function markCheckNow(runId) {
   writeState(state);
 }
 
-function shouldSendStartupMessage() {
-  const state = readState();
-  return !state.startupMessageSent;
-}
-
-function markStartupMessageSent() {
-  const state = readState();
-  state.startupMessageSent = true;
-  writeState(state);
-}
-
-function shouldSendSessionIssueAlert() {
-  const state = readState();
-  return !state.sessionIssueAlertSent;
-}
-
-function markSessionIssueAlertSent() {
-  const state = readState();
-  state.sessionIssueAlertSent = true;
-  writeState(state);
-}
-
 module.exports = {
   runReminderEscalation,
   markAutoSubmit,
   shouldRetryAutoSubmit,
   markCheckNow,
-  shouldSendStartupMessage,
-  markStartupMessageSent,
-  shouldSendSessionIssueAlert,
-  markSessionIssueAlertSent,
   readState,
   writeState,
   getReminderStage,

@@ -1,23 +1,18 @@
 const fs = require("fs");
 const cron = require("node-cron");
 const { config, log, validateConfig } = require("./config");
-const { hasSolvedToday, hasSubmittedTodayAnyStatus } = require("./leetcodeApi");
+const { hasSubmittedToday } = require("./leetcodeApi");
 const {
   runReminderEscalation,
   markAutoSubmit,
   shouldRetryAutoSubmit,
   markCheckNow,
-  shouldSendStartupMessage,
-  markStartupMessageSent,
-  shouldSendSessionIssueAlert,
-  markSessionIssueAlertSent,
   readState,
   getReminderStage,
   getMinutesSinceMidnightIst
 } = require("./reminderEngine");
 const { notifyType } = require("./telegramNotifier");
-const { ensureSessionReady } = require("./sessionManager");
-const { tryAutoSubmit } = require("./autoSubmit");
+const { getStorageStateFromEnv, tryPlaywrightSubmit } = require("./playwrightSubmit");
 
 let inMemoryRunning = false;
 
@@ -89,72 +84,80 @@ function releaseFileLock() {
   }
 }
 
-async function runGuardianCycle(runId) {
-  markCheckNow(runId);
-
-  if (shouldSendStartupMessage()) {
-    await notifyType("INFO", "LeetCode Streak Guardian is live. Monitoring has started.");
-    markStartupMessageSent();
+async function notifySessionIssueOncePerDay(reason) {
+  const stage = getReminderStage(getMinutesSinceMidnightIst());
+  if (stage.stage !== "emergency") {
+    log("INFO", "Suppressing session issue alert outside emergency window", { reason, stage: stage.stage });
+    return;
   }
 
+  const minutes = getMinutesSinceMidnightIst();
+  const alertStart = 2 * 60;
+  const alertEnd = alertStart + Math.max(1, config.checkIntervalMinutes);
+  const inFirstEmergencySlot = minutes >= alertStart && minutes < alertEnd;
+  if (!inFirstEmergencySlot) {
+    log("INFO", "Suppressing duplicate session issue alert for today", { reason, minutes });
+    return;
+  }
+
+  await notifyType(
+    "SESSION_EXPIRED",
+    "⚠️ LeetCode session expired.\n\nAutomation cannot continue.\nPlease regenerate session cookies."
+  );
+}
+
+async function runGuardianCycle(runId) {
+  markCheckNow(runId);
   log("INFO", "checking submissions", { runId });
 
   try {
-    const sessionStatus = await withRetry(() => ensureSessionReady(), "Session validation", 2);
-    if (!sessionStatus.ok) {
-      log("WARN", "Session validation failed, stopping automation for this run", { runId, reason: sessionStatus.reason });
-      if (shouldSendSessionIssueAlert()) {
-        await notifyType(
-          "SESSION_EXPIRED",
-          "LeetCode session expired.\n\nAutomation cannot continue.\nPlease regenerate session cookies."
-        );
-        markSessionIssueAlertSent();
-      }
-      return { ok: true, solved: false, authBlocked: true };
+    const submissionStatus = await withRetry(() => hasSubmittedToday(config.leetcode.username), "Submission check", 3);
+
+    if (submissionStatus.submitted) {
+      log("INFO", "submission detected", { runId, dayKey: submissionStatus.dayKey });
+      return { ok: true, submitted: true };
     }
 
-    log("INFO", "session loaded", { runId });
-    const result = await withRetry(() => hasSolvedToday(config.leetcode.username), "Submission check", 3);
+    log("WARN", "no submission today", { runId, dayKey: submissionStatus.dayKey });
 
-    if (result.solved) {
-      log("INFO", "submission detected", { runId, dayKey: result.dayKey });
-      return { ok: true, solved: true };
-    }
-
-    log("WARN", "No accepted submission found after reset time", { runId, dayKey: result.dayKey });
     const reminder = await runReminderEscalation();
-
-    if (reminder.shouldAutoSubmit && shouldRetryAutoSubmit()) {
-      const submitResult = await withRetry(() => tryAutoSubmit(), "Auto submit", 2);
-      markAutoSubmit(runId);
-
-      if (!submitResult.ok) {
-        await notifyType("ERROR", `Emergency auto-submit failed (${submitResult.reason}).`);
-      }
-
-      const postAcceptedCheck = await withRetry(() => hasSolvedToday(config.leetcode.username), "Post auto-submit AC check", 2);
-      if (!postAcceptedCheck.solved) {
-        const postAnySubmissionCheck = await withRetry(
-          () => hasSubmittedTodayAnyStatus(config.leetcode.username),
-          "Post auto-submit any-status check",
-          2
-        );
-
-        if (postAnySubmissionCheck.submitted) {
-          await notifyType(
-            "INFO",
-            "Submission activity detected after auto-submit (non-AC possible). Monitoring will continue until the reset window."
-          );
-        } else {
-          await notifyType(
-            "WARNING",
-            "Submission still not detected after auto-submit. Continuing reminders and periodic retries until 05:30 IST."
-          );
-        }
-      }
+    if (!reminder.shouldAutoSubmit || !shouldRetryAutoSubmit()) {
+      return { ok: true, submitted: false };
     }
 
-    return { ok: true, solved: false };
+    const sessionConfig = getStorageStateFromEnv();
+    if (!sessionConfig.ok) {
+      log("WARN", "session missing", { runId, reason: sessionConfig.reason });
+      await notifySessionIssueOncePerDay(sessionConfig.reason);
+      return { ok: true, submitted: false, authBlocked: true };
+    }
+
+    await notifyType("AUTO_SUBMIT_ACTIVATED", "🚨 Emergency Streak Saver Activated\nAttempting auto-submit to preserve streak.");
+
+    const submitResult = await withRetry(() => tryPlaywrightSubmit(config.leetcode.username), "Playwright submit", 2);
+    markAutoSubmit(runId);
+
+    if (!submitResult.ok) {
+      if (
+        submitResult.reason === "session_missing" ||
+        submitResult.reason === "session_invalid" ||
+        submitResult.reason === "session_expired"
+      ) {
+        await notifySessionIssueOncePerDay(submitResult.reason);
+        return { ok: true, submitted: false, authBlocked: true };
+      }
+      await notifyType("ERROR", `Auto-submit failed (${submitResult.reason}).`);
+      return { ok: true, submitted: false, autoSubmitFailed: true };
+    }
+
+    const postSubmitStatus = await withRetry(() => hasSubmittedToday(config.leetcode.username), "Post submit check", 2);
+    if (postSubmitStatus.submitted) {
+      await notifyType("INFO", "Submission activity detected after auto-submit.");
+      return { ok: true, submitted: true, autoSubmitted: true };
+    }
+
+    await notifyType("WARNING", "No submission detected after auto-submit attempt. Monitoring will continue.");
+    return { ok: true, submitted: false, autoSubmitted: true };
   } catch (error) {
     log("ERROR", "Guardian cycle failed", { runId, error: error.message });
     await notifyType("ERROR", `Guardian cycle failed: ${error.message}`);
@@ -216,13 +219,6 @@ function start() {
 
   for (const warning of validation.warnings) {
     log("WARN", warning);
-  }
-
-  if (config.checkIntervalMinutes > 5) {
-    log(
-      "INFO",
-      "CHECK_INTERVAL is above 5 minutes. Single-run mode adds one 5-minute follow-up cycle during high-urgency windows."
-    );
   }
 
   if (validation.fatalErrors.length > 0) {
