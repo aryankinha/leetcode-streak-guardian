@@ -87,12 +87,11 @@ async function isSessionValid(page, context) {
   console.log("Page title:", await page.title());
   console.log("Page URL:", page.url());
 
-  const loggedIn = await page.locator('[data-e2e-locator="navbar-user-profile"]').count();
-  const redirectedToLogin = page.url().includes("/accounts/login");
+  const loginButton = await page.locator('a[href="/accounts/login/"]').count();
   const cookies = await context.cookies();
   const hasSessionCookie = cookies.some((cookie) => cookie.name.toUpperCase().includes("LEETCODE_SESSION"));
 
-  return hasSessionCookie && !(loggedIn === 0 && redirectedToLogin);
+  return hasSessionCookie && loginButton === 0;
 }
 
 async function waitHumanDelay(page) {
@@ -188,8 +187,8 @@ async function tryPlaywrightSubmit(username) {
     console.log("Page title:", await page.title());
     console.log("Page URL:", page.url());
 
-    const loggedIn = await page.locator('[data-e2e-locator="navbar-user-profile"]').count();
-    if (loggedIn === 0 && page.url().includes("/accounts/login")) {
+    const loginButton = await page.locator('a[href="/accounts/login/"]').count();
+    if (loginButton > 0) {
       log("WARN", "session expired");
       return { ok: false, reason: "session_expired" };
     }
