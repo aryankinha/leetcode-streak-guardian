@@ -8,6 +8,9 @@ const { fetchRecentSubmissions, getLatestSubmittedProblemSlug } = require("./lee
 
 chromium.use(StealthPlugin());
 
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 function getStorageStateFromEnv() {
   const raw = process.env.LEETCODE_STORAGE_STATE;
   if (!raw || !raw.trim()) {
@@ -56,6 +59,8 @@ async function createAuthenticatedResources() {
   const browser = await createBrowser();
   const context = await browser.newContext({
     storageState: storageStatePath,
+    userAgent: USER_AGENT,
+    viewport: { width: 1366, height: 768 },
     locale: "en-US",
     timezoneId: "Asia/Kolkata"
   });
@@ -75,25 +80,19 @@ async function closeResources(resources) {
 
 async function isSessionValid(page, context) {
   await page.goto("https://leetcode.com/", { waitUntil: "domcontentloaded", timeout: 45000 });
-  await page.waitForTimeout(1200);
-
-  if (page.url().includes("/accounts/login")) {
-    return false;
-  }
+  await page.waitForTimeout(8000);
 
   await page.goto("https://leetcode.com/problemset/", { waitUntil: "domcontentloaded", timeout: 45000 });
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(8000);
+  console.log("Page title:", await page.title());
+  console.log("Page URL:", page.url());
 
-  if (page.url().includes("/accounts/login")) {
-    return false;
-  }
-
-  const signInVisible = (await page.locator('a[href*="/accounts/login"]').count()) > 0;
-  const profileVisible = (await page.locator('a[href*="/profile"], [data-e2e-locator="nav-user-avatar"]').count()) > 0;
+  const loggedIn = await page.locator('[data-e2e-locator="navbar-user-profile"]').count();
+  const redirectedToLogin = page.url().includes("/accounts/login");
   const cookies = await context.cookies();
   const hasSessionCookie = cookies.some((cookie) => cookie.name.toUpperCase().includes("LEETCODE_SESSION"));
 
-  return hasSessionCookie && (profileVisible || !signInVisible);
+  return hasSessionCookie && !(loggedIn === 0 && redirectedToLogin);
 }
 
 async function waitHumanDelay(page) {
@@ -185,8 +184,12 @@ async function tryPlaywrightSubmit(username) {
 
     const problemUrl = await resolveProblemUrl(username);
     await page.goto(problemUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+    await page.waitForTimeout(8000);
+    console.log("Page title:", await page.title());
+    console.log("Page URL:", page.url());
 
-    if (page.url().includes("/accounts/login")) {
+    const loggedIn = await page.locator('[data-e2e-locator="navbar-user-profile"]').count();
+    if (loggedIn === 0 && page.url().includes("/accounts/login")) {
       log("WARN", "session expired");
       return { ok: false, reason: "session_expired" };
     }
