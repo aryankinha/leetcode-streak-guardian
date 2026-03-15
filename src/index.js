@@ -216,6 +216,10 @@ async function runSingleRunWindow() {
 
 function start() {
   const validation = validateConfig();
+  // TEST MODE OVERRIDE
+  if (process.env.TEST_MODE === "true") {
+    console.log("[TEST MODE] Reminder and emergency windows forced active");
+  }
 
   for (const warning of validation.warnings) {
     log("WARN", warning);

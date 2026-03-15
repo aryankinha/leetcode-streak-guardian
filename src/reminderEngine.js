@@ -4,6 +4,7 @@ const { notifyType } = require("./telegramNotifier");
 const { getCurrentLeetCodeDayKey } = require("./leetcodeApi");
 
 const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+const TEST_MODE = process.env.TEST_MODE === "true";
 
 function buildDefaultState() {
   return {
@@ -57,6 +58,11 @@ function getMinutesSinceMidnightIst(date = nowIst()) {
 }
 
 function getReminderStage(minutes) {
+  // TEST MODE OVERRIDE
+  if (TEST_MODE) {
+    return { stage: "emergency", interval: 0 };
+  }
+
   const m = minutes;
   const eightPm = 20 * 60;
   const tenPm = 22 * 60;
@@ -91,6 +97,20 @@ async function runReminderEscalation() {
   const state = readState();
   const now = new Date();
   const stage = getReminderStage(getMinutesSinceMidnightIst());
+  const dayKey = getCurrentLeetCodeDayKey();
+
+  // TEST MODE OVERRIDE
+  if (TEST_MODE) {
+    console.log("[DEBUG] UTC time:", now.toISOString());
+    console.log("[DEBUG] IST time:", now.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }));
+    console.log("[DEBUG] DayKey:", dayKey);
+    console.log("[DEBUG] Reminder state:", JSON.stringify({
+      lastReminderAt: state.lastReminderAt,
+      lastAutoSubmitAt: state.lastAutoSubmitAt,
+      lastReminderStage: state.lastReminderStage
+    }));
+    console.log("[DEBUG] Emergency window active:", stage.stage === "emergency");
+  }
 
   if (!shouldSendReminder(stage, state, now)) {
     return { state, stage, shouldAutoSubmit: stage.stage === "emergency" };
