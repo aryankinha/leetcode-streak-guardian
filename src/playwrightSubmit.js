@@ -1,3 +1,6 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const { chromium } = require("playwright-extra");
 const StealthPlugin = require("puppeteer-extra-plugin-stealth");
 const { log } = require("./config");
@@ -12,10 +15,22 @@ function getStorageStateFromEnv() {
   }
 
   try {
+    console.log("[DEBUG] storage state length:", raw.length);
     const parsed = JSON.parse(raw);
+    console.log("[DEBUG] parsed cookies count:", parsed.cookies?.length || 0);
     if (!parsed || !Array.isArray(parsed.cookies) || !Array.isArray(parsed.origins)) {
       return { ok: false, reason: "session_invalid" };
     }
+
+    const hasLeetCodeCookies = parsed.cookies.some((cookie) =>
+      typeof cookie?.domain === "string" && cookie.domain.includes(".leetcode.com")
+    );
+
+    if (!hasLeetCodeCookies) {
+      log("WARN", "Storage state does not contain .leetcode.com cookies");
+      return { ok: false, reason: "session_invalid" };
+    }
+
     return { ok: true, storageState: parsed };
   } catch {
     return { ok: false, reason: "session_invalid" };
@@ -35,20 +50,26 @@ async function createAuthenticatedResources() {
     return { ok: false, reason: session.reason };
   }
 
+  const storageStatePath = path.join(os.tmpdir(), `leetcode-state-${process.pid}.json`);
+  fs.writeFileSync(storageStatePath, JSON.stringify(session.storageState), "utf8");
+
   const browser = await createBrowser();
   const context = await browser.newContext({
-    storageState: session.storageState,
+    storageState: storageStatePath,
     locale: "en-US",
     timezoneId: "Asia/Kolkata"
   });
   const page = await context.newPage();
 
-  return { ok: true, browser, context, page };
+  return { ok: true, browser, context, page, storageStatePath };
 }
 
 async function closeResources(resources) {
   if (resources?.browser) {
     await resources.browser.close();
+  }
+  if (resources?.storageStatePath) {
+    fs.rmSync(resources.storageStatePath, { force: true });
   }
 }
 
