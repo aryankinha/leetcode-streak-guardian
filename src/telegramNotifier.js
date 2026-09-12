@@ -1,54 +1,24 @@
-const axios = require("axios");
-const { config, log } = require("./config");
+const TelegramBot = require('node-telegram-bot-api');
+const config = require('./config');
 
-async function sendTelegram(message) {
-  if (!config.telegram.botToken || !config.telegram.chatId) {
-    log("WARN", "Telegram not configured; skipping notification");
-    return false;
+const bot = new TelegramBot(config.telegram.token, { polling: false });
+
+async function sendMessage(text) {
+  const token = config.telegram.token?.trim();
+  const chatId = config.telegram.chatId?.trim();
+  const placeholders = ['your_bot_token', 'your_chat_id', ''];
+
+  if (!token || !chatId || placeholders.includes(token.toLowerCase()) || placeholders.includes(chatId.toLowerCase())) {
+    console.warn('[WARN] Telegram token or chatId not configured in .env. Skipping message.');
+    return;
   }
 
-  const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      await axios.post(
-        url,
-        {
-          chat_id: config.telegram.chatId,
-          text: message
-        },
-        {
-          timeout: 15000
-        }
-      );
-      log("INFO", "Telegram notification sent", { attempt });
-      return true;
-    } catch (error) {
-      log("ERROR", "Failed to send Telegram notification", { attempt, error: error.message });
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
-      }
-    }
+  try {
+    await bot.sendMessage(config.telegram.chatId, text);
+    console.log(`Telegram message sent: ${text}`);
+  } catch (error) {
+    console.error(`Error sending Telegram message: ${error.message}`);
   }
-
-  return false;
 }
 
-async function notifyType(type, message) {
-  const prefixes = {
-    INFO: "[INFO]",
-    WARNING: "[WARNING]",
-    AUTO_SUBMIT_ACTIVATED: "[AUTO SUBMIT ACTIVATED]",
-    SESSION_EXPIRED: "[SESSION EXPIRED]",
-    LOGIN_REQUIRED: "[LOGIN REQUIRED]",
-    CAPTCHA_DETECTED: "[CAPTCHA DETECTED]",
-    ERROR: "[ERROR]"
-  };
-
-  const prefix = prefixes[type] || "[NOTICE]";
-  return sendTelegram(`${prefix}\n${message}`);
-}
-
-module.exports = {
-  sendTelegram,
-  notifyType
-};
+module.exports = { sendMessage };

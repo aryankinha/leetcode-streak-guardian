@@ -1,82 +1,40 @@
-const fs = require("fs");
-const path = require("path");
-const dotenv = require("dotenv");
+require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
 
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+const rootDir = path.join(__dirname, '..');
+const runtimeDir = path.join(rootDir, 'runtime');
+const logsDir = path.join(rootDir, 'logs');
 
-const ROOT_DIR = path.resolve(__dirname, "..");
-const LOGS_DIR = path.resolve(ROOT_DIR, "logs");
-const STATE_PATH = path.resolve(LOGS_DIR, "runtimeState.json");
-const LOCK_FILE_PATH = path.resolve(LOGS_DIR, "guardian.lock");
-const LOG_FILE_PATH = path.resolve(LOGS_DIR, `guardian-${new Date().toISOString().slice(0, 10)}.log`);
-
-for (const dir of [LOGS_DIR]) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+// Ensure runtime and logs directories exist on boot
+if (!fs.existsSync(runtimeDir)) {
+  fs.mkdirSync(runtimeDir, { recursive: true });
 }
-
-function toPositiveNumber(value, fallback) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
-
-const config = {
-  appName: "leetcode-streak-guardian",
-  checkIntervalMinutes: toPositiveNumber(process.env.CHECK_INTERVAL, 10),
-  useInternalCron: String(process.env.USE_INTERNAL_CRON || "false").toLowerCase() === "true",
-  autoSubmitRetryMinutes: toPositiveNumber(process.env.AUTO_SUBMIT_RETRY_MINUTES, 15),
-  lockStaleMinutes: toPositiveNumber(process.env.LOCK_STALE_MINUTES, 25),
-  leetcode: {
-    username: process.env.LEETCODE_USERNAME,
-    graphqlUrl: "https://leetcode.com/graphql"
-  },
-  telegram: {
-    botToken: process.env.TELEGRAM_BOT_TOKEN,
-    chatId: process.env.TELEGRAM_CHAT_ID
-  },
-  paths: {
-    ROOT_DIR,
-    LOGS_DIR,
-    STATE_PATH,
-    LOCK_FILE_PATH,
-    LOG_FILE_PATH
-  }
-};
-
-function log(level, message, meta = null) {
-  const time = new Date().toISOString();
-  const line = `[${level}] ${time} ${message}${meta ? ` ${JSON.stringify(meta)}` : ""}`;
-  console.log(line);
-  try {
-    fs.appendFileSync(config.paths.LOG_FILE_PATH, `${line}\n`, "utf8");
-  } catch (error) {
-    console.error(`[WARN] ${time} Failed to write log file: ${error.message}`);
-  }
-}
-
-function validateConfig() {
-  const fatalErrors = [];
-  const warnings = [];
-
-  if (!config.leetcode.username) {
-    fatalErrors.push("LEETCODE_USERNAME is required");
-  }
-
-  if (!config.telegram.botToken || !config.telegram.chatId) {
-    fatalErrors.push("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required");
-  }
-
-  if (!process.env.LEETCODE_STORAGE_STATE || !process.env.LEETCODE_STORAGE_STATE.trim()) {
-    fatalErrors.push("LEETCODE_STORAGE_STATE is required");
-  }
-
-  return { fatalErrors, warnings };
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
 }
 
 module.exports = {
-  config,
-  log,
-  validateConfig
+  leetcode: {
+    username: process.env.LEETCODE_USERNAME,
+    email: process.env.LEETCODE_EMAIL,
+    password: process.env.LEETCODE_PASSWORD,
+    session: process.env.LEETCODE_SESSION,
+    csrfToken: process.env.LEETCODE_CSRF_TOKEN || process.env.LEETCODE_CSRFTOKEN,
+    graphqlUrl: 'https://leetcode.com/graphql',
+  },
+  telegram: {
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.TELEGRAM_CHAT_ID,
+  },
+  checkInterval: parseInt(process.env.CHECK_INTERVAL || '10', 10),
+  paths: {
+    runtimeDir,
+    logsDir,
+    session: path.join(runtimeDir, 'session.json'),
+    sessionMeta: path.join(runtimeDir, 'session-meta.json'),
+    submissionHistory: path.join(runtimeDir, 'submission-history.json'),
+    runtimeState: path.join(runtimeDir, 'state.json'),
+    logs: path.join(logsDir, 'app.log'),
+  },
 };

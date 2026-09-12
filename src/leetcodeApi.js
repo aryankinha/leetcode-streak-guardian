@@ -1,124 +1,192 @@
-const axios = require("axios");
-const { config, log } = require("./config");
+const axios = require('axios');
+const fs = require('fs');
+const config = require('./config');
+const { DEFAULT_USER_AGENT } = require('./sessionManager');
 
-const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-function toIst(date = new Date()) {
-  return new Date(date.getTime() + IST_OFFSET_MS);
-}
-
-function getCurrentLeetCodeDayKey(now = new Date()) {
-  const istNow = toIst(now);
-  let dayAnchor = Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), istNow.getUTCDate());
-  const minuteOfDay = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
-
-  if (minuteOfDay < 5 * 60 + 30) {
-    dayAnchor -= ONE_DAY_MS;
-  }
-
-  const anchor = new Date(dayAnchor);
-  const year = anchor.getUTCFullYear();
-  const month = String(anchor.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(anchor.getUTCDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function getTodayResetEpochSeconds(now = new Date()) {
-  const istNow = toIst(now);
-  const y = istNow.getUTCFullYear();
-  const m = istNow.getUTCMonth();
-  const d = istNow.getUTCDate();
-
-  let resetIstEpochMs = Date.UTC(y, m, d, 5, 30, 0);
-  if (istNow.getUTCHours() * 60 + istNow.getUTCMinutes() < 5 * 60 + 30) {
-    resetIstEpochMs -= ONE_DAY_MS;
-  }
-
-  return Math.floor((resetIstEpochMs - IST_OFFSET_MS) / 1000);
-}
-
-async function executeGraphql(query, variables, retries = 3) {
-  for (let attempt = 1; attempt <= retries; attempt += 1) {
-    try {
-      const response = await axios.post(
-        config.leetcode.graphqlUrl,
-        { query, variables },
-        {
-          timeout: 15000,
-          headers: {
-            "Content-Type": "application/json",
-            Referer: "https://leetcode.com/"
-          }
-        }
-      );
-
-      if (response.data?.errors) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
-      }
-
-      return response.data?.data || {};
-    } catch (error) {
-      log("ERROR", `GraphQL request failed (attempt ${attempt}/${retries})`, {
-        error: error.message,
-        username: variables?.username || "unknown"
-      });
-      if (attempt === retries) throw error;
-      await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+const RECENT_SUBMISSIONS_QUERY = `
+  query recentAcSubmissions($username: String!, $limit: Int!) {
+    recentAcSubmissionList(username: $username, limit: $limit) {
+      id
+      title
+      titleSlug
+      timestamp
     }
   }
+`;
 
-  return {};
-}
-
-async function fetchRecentSubmissions(username) {
-  const query = `
-    query recentSubmissions($username: String!) {
-      recentSubmissionList(username: $username) {
+const DAILY_CHALLENGE_QUERY = `
+  query questionOfToday {
+    activeDailyCodingChallengeQuestion {
+      date
+      userStatus
+      link
+      question {
+        questionId
+        questionFrontendId
         title
         titleSlug
-        timestamp
-        statusDisplay
+        difficulty
       }
     }
-  `;
+  }
+`;
 
-  const data = await executeGraphql(query, { username }, 3);
-  return data.recentSubmissionList || [];
-}
+/**
+ * Resolves the LeetCode username:
+ * 1. Checks LEETCODE_USERNAME from .env
+ * 2. Checks runtime/session-meta.json
+ */
+function resolveUsername() {
+  const envUsername = config.leetcode.username?.trim();
+  const placeholders = ['your_username', 'your_leetcode_username', 'username', ''];
 
-function isSubmissionAfterReset(submission, resetEpoch) {
-  return Number(submission?.timestamp) >= resetEpoch;
-}
-
-function getLatestSubmittedProblemSlug(submissions) {
-  const latestWithSlug = [...submissions]
-    .filter((submission) => typeof submission?.titleSlug === "string" && submission.titleSlug.trim())
-    .sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0))[0];
-  return latestWithSlug ? latestWithSlug.titleSlug.trim() : "two-sum";
-}
-
-async function hasSubmittedToday(username) {
-  if (!username) {
-    throw new Error("LEETCODE_USERNAME is required");
+  if (envUsername && !placeholders.includes(envUsername.toLowerCase())) {
+    return envUsername;
   }
 
-  const submissions = await fetchRecentSubmissions(username);
-  const resetEpoch = getTodayResetEpochSeconds();
-  const submitted = submissions.some((submission) => isSubmissionAfterReset(submission, resetEpoch));
+  if (fs.existsSync(config.paths.sessionMeta)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(config.paths.sessionMeta, 'utf-8'));
+      if (meta.username && meta.username.trim() && !placeholders.includes(meta.username.trim().toLowerCase())) {
+        return meta.username.trim();
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
 
-  return {
-    submitted,
-    resetEpoch,
-    submissions,
-    dayKey: getCurrentLeetCodeDayKey()
-  };
+  return envUsername || null;
+}
+
+/**
+ * Calculates start epoch timestamp (in seconds) of the current LeetCode streak cycle.
+ * LeetCode resets daily at 00:00 UTC (05:30 IST).
+ */
+function getStreakResetTimestamp(now = new Date()) {
+  const resetUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0)
+  );
+  return Math.floor(resetUtc.getTime() / 1000);
+}
+
+/**
+ * Queries today's official LeetCode Daily Coding Challenge (DCC).
+ */
+async function getDailyCodingChallenge() {
+  try {
+    const response = await axios.post(
+      config.leetcode.graphqlUrl,
+      { query: DAILY_CHALLENGE_QUERY },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': DEFAULT_USER_AGENT,
+          'Referer': 'https://leetcode.com',
+          'Origin': 'https://leetcode.com',
+        },
+        timeout: 10000,
+      }
+    );
+
+    const dcc = response.data?.data?.activeDailyCodingChallengeQuestion;
+    if (!dcc) return null;
+
+    return {
+      date: dcc.date,
+      userStatus: dcc.userStatus,
+      link: `https://leetcode.com${dcc.link}`,
+      title: dcc.question?.title,
+      slug: dcc.question?.titleSlug,
+      difficulty: dcc.question?.difficulty,
+      frontendId: dcc.question?.questionFrontendId,
+    };
+  } catch (error) {
+    console.warn('[WARN] Could not fetch Daily Coding Challenge:', error.message);
+    return null;
+  }
+}
+
+/**
+ * Performs a robust tri-state check for today's LeetCode submissions:
+ * Returns:
+ *   { status: 'SOLVED', submission: { title, slug, timestamp } }
+ *   { status: 'UNSOLVED' }
+ *   { status: 'ERROR', message: string }
+ */
+async function checkSubmissionsToday() {
+  const username = resolveUsername();
+
+  if (!username) {
+    console.warn('[WARN] No username found in .env or session-meta.json.');
+    return {
+      status: 'ERROR',
+      message: 'No LeetCode username available. Please configure .env or run "npm run login".',
+    };
+  }
+
+  try {
+    const response = await axios.post(
+      config.leetcode.graphqlUrl,
+      {
+        query: RECENT_SUBMISSIONS_QUERY,
+        variables: {
+          username,
+          limit: 15,
+        },
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': DEFAULT_USER_AGENT,
+          'Referer': 'https://leetcode.com',
+          'Origin': 'https://leetcode.com',
+        },
+        timeout: 12000,
+      }
+    );
+
+    const submissions = response.data?.data?.recentAcSubmissionList;
+    if (!submissions || !Array.isArray(submissions)) {
+      return { status: 'UNSOLVED', username };
+    }
+
+    const resetTimestamp = getStreakResetTimestamp();
+
+    // Check if any accepted submission has occurred since 00:00 UTC
+    const todaySubmission = submissions.find(
+      (sub) => parseInt(sub.timestamp, 10) >= resetTimestamp
+    );
+
+    if (todaySubmission) {
+      return {
+        status: 'SOLVED',
+        username,
+        submission: {
+          id: todaySubmission.id,
+          title: todaySubmission.title,
+          slug: todaySubmission.titleSlug,
+          timestamp: parseInt(todaySubmission.timestamp, 10),
+        },
+      };
+    }
+
+    return {
+      status: 'UNSOLVED',
+      username,
+    };
+  } catch (error) {
+    console.error('[ERROR] LeetCode GraphQL submission query failed:', error.message);
+    return {
+      status: 'ERROR',
+      username,
+      message: error.message,
+    };
+  }
 }
 
 module.exports = {
-  hasSubmittedToday,
-  fetchRecentSubmissions,
-  getLatestSubmittedProblemSlug,
-  getTodayResetEpochSeconds,
-  getCurrentLeetCodeDayKey
+  resolveUsername,
+  getStreakResetTimestamp,
+  getDailyCodingChallenge,
+  checkSubmissionsToday,
 };

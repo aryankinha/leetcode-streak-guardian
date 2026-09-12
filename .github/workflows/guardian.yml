@@ -1,0 +1,105 @@
+name: LeetCode Streak Guardian
+
+on:
+  schedule:
+    # Daily Check & Reminders (IST = UTC + 5:30)
+    # Off-hour scheduling (:15 and :45) avoids GitHub Actions peak queue delays
+    - cron: '45 12 * * *' # 18:15 IST - Initial Daily Check & Friendly Reminder
+    - cron: '45 15 * * *' # 21:15 IST - Evening Reminder
+    - cron: '45 17 * * *' # 23:15 IST - Late Night Urgency Alert
+    - cron: '45 19 * * *' # 01:15 IST - Critical Pre-Submission Alert
+    # Auto-Submit Windows (LeetCode resets at 05:30 IST / 00:00 UTC)
+    - cron: '15 21 * * *' # 02:45 IST - Auto-Submit Window Attempt 1
+    - cron: '15 22 * * *' # 03:45 IST - Auto-Submit Retry Window 2
+    - cron: '15 23 * * *' # 04:45 IST - Final Emergency Auto-Submit (45m before reset)
+
+  workflow_dispatch:
+    inputs:
+      force_submit:
+        description: 'Force immediate auto-submit (bypasses time checks)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run (verifies problem selection & Monaco injection without submitting)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: leetcode-streak-guardian
+  cancel-in-progress: false
+
+jobs:
+  guardian:
+    name: Run Streak Guardian Cycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      # Restore ONLY state.json and submission-history.json.
+      # NEVER restore session.json from cache to prevent session poisoning.
+      - name: Restore Runtime State Cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            runtime/state.json
+            runtime/submission-history.json
+          key: guardian-state-${{ github.run_id }}
+          restore-keys: |
+            guardian-state-
+
+      # Cache Playwright browser binaries
+      - name: Cache Playwright Browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright & OS Dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright OS Dependencies Only
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Execute Guardian Cycle
+        env:
+          LEETCODE_USERNAME: ${{ vars.LEETCODE_USERNAME || secrets.LEETCODE_USERNAME }}
+          LEETCODE_SESSION: ${{ secrets.LEETCODE_SESSION }}
+          LEETCODE_CSRF_TOKEN: ${{ secrets.LEETCODE_CSRF_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          ARGS=""
+          if [ "${{ inputs.force_submit }}" = "true" ]; then
+            ARGS="$ARGS --force-submit"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          xvfb-run --auto-servernum -- node src/runOnce.js $ARGS
+
+      # Persist state back to cache for subsequent runs
+      - name: Save Runtime State Cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            runtime/state.json
+            runtime/submission-history.json
+          key: guardian-state-${{ github.run_id }}
