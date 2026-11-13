@@ -1,32 +1,28 @@
 const assert = require('assert');
 const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
 const config = require('../src/config');
-const problemBank = require('../src/problemBank');
 const reminderEngine = require('../src/reminderEngine');
-const sessionManager = require('../src/sessionManager');
 const leetcodeApi = require('../src/leetcodeApi');
-const humanBehavior = require('../src/humanBehavior');
-const autoSubmit = require('../src/autoSubmit');
+
+const { WINDOW } = reminderEngine;
+
+function at(hour, minute) {
+  return hour * 60 + minute;
+}
 
 async function runTests() {
   console.log('====================================================');
-  console.log('      Running Streak Guardian Verification Suite    ');
+  console.log('      LeetCode Streak Guardian — Test Suite          ');
   console.log('====================================================\n');
 
   let passed = 0;
   let failed = 0;
 
-  // Snapshot runtime state files to guarantee test isolation
   const backupState = fs.existsSync(config.paths.runtimeState)
     ? fs.readFileSync(config.paths.runtimeState, 'utf-8')
     : null;
   const backupMeta = fs.existsSync(config.paths.sessionMeta)
     ? fs.readFileSync(config.paths.sessionMeta, 'utf-8')
-    : null;
-  const backupHistory = fs.existsSync(config.paths.submissionHistory)
-    ? fs.readFileSync(config.paths.submissionHistory, 'utf-8')
     : null;
 
   function restoreBackups() {
@@ -41,270 +37,372 @@ async function runTests() {
     } else if (fs.existsSync(config.paths.sessionMeta)) {
       fs.unlinkSync(config.paths.sessionMeta);
     }
+  }
 
-    if (backupHistory !== null) {
-      fs.writeFileSync(config.paths.submissionHistory, backupHistory, 'utf-8');
-    } else if (fs.existsSync(config.paths.submissionHistory)) {
-      fs.unlinkSync(config.paths.submissionHistory);
-    }
+  function writeState(overrides = {}) {
+    const base = {
+      streakDay: '2026-11-13',
+      firstReminderSentDay: null,
+      lastAlertTime: 0,
+      pendingAlertDay: null,
+      safeNotifiedDay: null,
+      lastErrorAlertTime: 0,
+    };
+
+    fs.writeFileSync(
+      config.paths.runtimeState,
+      JSON.stringify({ ...base, ...overrides }, null, 2),
+      'utf-8'
+    );
+  }
+
+  function collector() {
+    const messages = [];
+    return {
+      messages,
+      send: async (message) => {
+        messages.push(message);
+        return true;
+      },
+    };
   }
 
   function test(name, fn) {
     try {
       fn();
-      console.log(`  ✅ PASS: ${name}`);
-      passed++;
-    } catch (err) {
-      console.error(`  ❌ FAIL: ${name}`);
-      console.error(`     ${err.stack || err.message}`);
-      failed++;
+      console.log(`  PASS: ${name}`);
+      passed += 1;
+    } catch (error) {
+      console.error(`  FAIL: ${name}`);
+      console.error(`        ${error.stack || error.message}`);
+      failed += 1;
     }
   }
 
   async function testAsync(name, fn) {
     try {
       await fn();
-      console.log(`  ✅ PASS: ${name}`);
-      passed++;
-    } catch (err) {
-      console.error(`  ❌ FAIL: ${name}`);
-      console.error(`     ${err.stack || err.message}`);
-      failed++;
+      console.log(`  PASS: ${name}`);
+      passed += 1;
+    } catch (error) {
+      console.error(`  FAIL: ${name}`);
+      console.error(`        ${error.stack || error.message}`);
+      failed += 1;
     }
   }
 
   try {
-    // Group 1: Configuration & Auto-directory Creation
-    console.log('--- Group 1: Configuration & File System ---');
-    test('runtime and logs directories are automatically created', () => {
-      assert(fs.existsSync(config.paths.runtimeDir), 'runtime directory should exist');
-      assert(fs.existsSync(config.paths.logsDir), 'logs directory should exist');
+    console.log('--- Configuration ---');
+    test('runtime and logs directories exist', () => {
+      assert(fs.existsSync(config.paths.runtimeDir), 'runtime directory is missing');
+      assert(fs.existsSync(config.paths.logsDir), 'logs directory is missing');
     });
 
-    test('config contains expected paths', () => {
-      assert(config.paths.session.endsWith('session.json'));
-      assert(config.paths.sessionMeta.endsWith('session-meta.json'));
-      assert(config.paths.submissionHistory.endsWith('submission-history.json'));
+    test('config exposes the expected state paths', () => {
       assert(config.paths.runtimeState.endsWith('state.json'));
+      assert(config.paths.sessionMeta.endsWith('session-meta.json'));
     });
 
-    // Group 2: Problem Bank & Rotation Logic
-    console.log('\n--- Group 2: Problem Bank & Anti-Ban Engine ---');
-    test('problem bank contains 30+ verified problems with correct metadata', () => {
-      assert(problemBank.PROBLEM_BANK.length >= 30, `Expected at least 30 problems, got ${problemBank.PROBLEM_BANK.length}`);
-      for (const p of problemBank.PROBLEM_BANK) {
-        assert(p.id, `Problem missing ID: ${JSON.stringify(p)}`);
-        assert(p.title, `Problem missing title: ${JSON.stringify(p)}`);
-        assert(p.slug, `Problem missing slug: ${JSON.stringify(p)}`);
-        assert(p.solution.includes('class Solution:'), `Solution missing Solution class: ${p.slug}`);
-      }
+    test('check interval is clamped to a valid cron range', () => {
+      assert(config.checkInterval >= 1 && config.checkInterval <= 59);
     });
 
-    test('all problem bank solutions have valid Python 3 syntax and method signatures', () => {
-      const pythonScript = `
-import ast, sys
-from typing import Optional, List
-
-class ListNode:
-    def __init__(self, val=0, next=None):
-        self.val = val
-        self.next = next
-
-class TreeNode:
-    def __init__(self, val=0, left=None, right=None):
-        self.val = val
-        self.left = left
-        self.right = right
-
-problems = ${JSON.stringify(problemBank.PROBLEM_BANK.map(p => ({ id: p.id, slug: p.slug, solution: p.solution })))}
-
-for p in problems:
-    tree = ast.parse(p['solution'])
-    has_solution = False
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == 'Solution':
-            has_solution = True
-            funcs = [m for m in node.body if isinstance(m, ast.FunctionDef)]
-            assert len(funcs) >= 1, f"No method in Solution for {p['slug']}"
-            method = funcs[0]
-            args = [a.arg for a in method.args.args]
-            assert 'self' in args, f"Method {method.name} missing self in {p['slug']}"
-            if p['slug'] == 'valid-anagram':
-                assert len(args) == 3, f"isAnagram expected 3 args (self, s, t), got {args}"
-    assert has_solution, f"No class Solution in {p['slug']}"
-print("PYTHON_VALIDATION_SUCCESS")
-`;
-      const output = execSync('python3', { input: pythonScript, encoding: 'utf-8' });
-      assert(output.includes('PYTHON_VALIDATION_SUCCESS'), 'Python validation script failed');
+    console.log('\n--- IST time and reminder windows ---');
+    test('getISTParts converts UTC to IST', () => {
+      const parts = reminderEngine.getISTParts(new Date('2026-11-13T12:30:00Z'));
+      assert.strictEqual(parts.hour, 18);
+      assert.strictEqual(parts.minute, 0);
+      assert.strictEqual(parts.istDateStr, '2026-11-13');
+      assert.strictEqual(parts.totalMinutesFromMidnight, at(18, 0));
     });
 
-    test('generateSolutionCode adds dynamic nonce comments', () => {
-      const p = problemBank.PROBLEM_BANK[0];
-      const code1 = problemBank.generateSolutionCode(p);
-      const code2 = problemBank.generateSolutionCode(p);
-      assert(code1.includes('class Solution:'), 'Code should contain Solution class');
-      assert(code1.startsWith('#'), 'Code should start with comment');
-      assert(typeof code1 === 'string' && code1.length > p.solution.length);
+    test('midnight is hour 0, not hour 24', () => {
+      const parts = reminderEngine.getISTParts(new Date('2026-11-13T18:30:00Z'));
+      assert.strictEqual(parts.hour, 0);
+      assert.strictEqual(parts.istDateStr, '2026-11-14');
     });
 
-    test('problem rotation filters out recently solved problems', () => {
-      const p1 = problemBank.PROBLEM_BANK[0];
-      const p2 = problemBank.PROBLEM_BANK[1];
-
-      const testRecord = {
-        problemId: p1.id,
-        slug: p1.slug,
-        title: p1.title,
-        timestamp: Date.now(),
-        status: 'Accepted',
-      };
-
-      fs.writeFileSync(config.paths.submissionHistory, JSON.stringify([testRecord], null, 2));
-
-      const recentSlugs = problemBank.getRecentSolvedSlugs(14);
-      assert(recentSlugs.has(p1.slug), 'p1 slug should be in recent solved slugs');
-      assert(!recentSlugs.has(p2.slug), 'p2 slug should NOT be in recent solved slugs');
-
-      for (let i = 0; i < 10; i++) {
-        const selected = problemBank.selectProblem([p1.slug]);
-        assert.notStrictEqual(selected.slug, p1.slug, 'selectProblem picked excluded slug');
-      }
-    });
-
-    // Group 3: Timezone, Date Boundaries & Reminder Engine
-    console.log('\n--- Group 3: Timezone & Date Boundaries ---');
-    test('getISTParts accurately formats Asia/Kolkata time', () => {
-      const parts = reminderEngine.getISTParts();
-      assert(parts.year >= 2026, 'Year should be >= 2026');
-      assert(parts.month >= 1 && parts.month <= 12, 'Month should be between 1 and 12');
-      assert(parts.day >= 1 && parts.day <= 31, 'Day should be between 1 and 31');
-      assert(parts.hour >= 0 && parts.hour <= 23, 'Hour should be between 0 and 23');
-      assert(parts.minute >= 0 && parts.minute <= 59, 'Minute should be between 0 and 59');
-      assert.strictEqual(parts.totalMinutesFromMidnight, parts.hour * 60 + parts.minute);
-    });
-
-    test('getLeetCodeStreakDay matches UTC date string', () => {
-      const fixedDate = new Date('2026-09-11T20:30:00Z');
-      const streakDay = reminderEngine.getLeetCodeStreakDay(fixedDate);
-      assert.strictEqual(streakDay, '2026-09-11');
-    });
-
-    test('6 PM reminder suppression bug is fixed with streak day tracking', () => {
-      const state = reminderEngine.loadState();
-      const streakDay = reminderEngine.getLeetCodeStreakDay();
-
-      state.firstReminderSentDay = null;
-      reminderEngine.saveState(state);
-
-      const reloaded = reminderEngine.loadState();
-      assert.strictEqual(reloaded.firstReminderSentDay, null);
-
-      reloaded.firstReminderSentDay = streakDay;
-      reminderEngine.saveState(reloaded);
-
-      const checkState = reminderEngine.loadState();
-      assert.strictEqual(checkState.firstReminderSentDay, streakDay);
-    });
-
-    test('autoSubmit jitter is bounded between 2:15 AM (135 min) and 3:45 AM (225 min) IST', () => {
-      const state = reminderEngine.loadState();
-      assert(
-        state.autoSubmitJitterMinutes >= 135 && state.autoSubmitJitterMinutes <= 225,
-        `Jitter ${state.autoSubmitJitterMinutes} outside range [135, 225]`
+    test('streak day follows the UTC date', () => {
+      assert.strictEqual(
+        reminderEngine.getLeetCodeStreakDay(new Date('2026-11-13T20:30:00Z')),
+        '2026-11-13'
+      );
+      assert.strictEqual(
+        reminderEngine.getLeetCodeStreakDay(new Date('2026-11-14T00:30:00Z')),
+        '2026-11-14'
       );
     });
 
-    test('autoSubmit state tracks attempts and enforces max retry count', () => {
-      const state = reminderEngine.loadState();
-      state.autoSubmit.attemptCount = 3;
-      state.autoSubmit.succeeded = false;
-      reminderEngine.saveState(state);
-
-      const saved = reminderEngine.loadState();
-      assert.strictEqual(saved.autoSubmit.attemptCount, 3);
-      assert.strictEqual(saved.autoSubmit.succeeded, false);
+    test('reminder window boundaries are correct', () => {
+      assert.strictEqual(reminderEngine.getReminderWindow(at(17, 59)), WINDOW.QUIET);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(18, 0)), WINDOW.EVENING);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(19, 59)), WINDOW.EVENING);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(20, 0)), WINDOW.LATE_EVENING);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(21, 59)), WINDOW.LATE_EVENING);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(22, 0)), WINDOW.URGENT);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(0, 0)), WINDOW.URGENT);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(0, 59)), WINDOW.URGENT);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(1, 0)), WINDOW.CRITICAL);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(5, 29)), WINDOW.CRITICAL);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(5, 30)), WINDOW.QUIET);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(12, 0)), WINDOW.QUIET);
     });
 
-    test('autoSubmit state structure is preserved even when reading empty/old state files', () => {
-      fs.writeFileSync(config.paths.runtimeState, JSON.stringify({ streakDay: '2026-09-11' }));
-      const loaded = reminderEngine.loadState();
-      assert(loaded.autoSubmit, 'autoSubmit should be defined');
-      assert.strictEqual(loaded.autoSubmit.attemptCount, 0);
-      assert.strictEqual(loaded.autoSubmit.succeeded, false);
-      assert.strictEqual(loaded.autoSubmit.lastAttemptTime, 0);
+    test('reminder intervals match the schedule', () => {
+      assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.EVENING), null);
+      assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.LATE_EVENING), 30);
+      assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.URGENT), 15);
+      assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.CRITICAL), 10);
+      assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.QUIET), null);
     });
 
-    // Group 4: Session Manager & Dual Mode Auth
-    console.log('\n--- Group 4: Session Manager & Dual Mode Auth ---');
-    test('sessionMeta persists and reads cleanly', () => {
-      const meta = { username: 'testuser_test_run', mode: 'session.json', testRun: true };
-      sessionManager.saveSessionMeta(meta);
-
-      const read = sessionManager.getSessionMeta();
-      assert(read, 'sessionMeta should be readable');
-      assert.strictEqual(read.username, 'testuser_test_run');
-      assert.strictEqual(read.mode, 'session.json');
-      assert(read.updatedAt, 'updatedAt should be set');
+    test('minutes until reset are correct', () => {
+      const parts = (iso) => reminderEngine.getISTParts(new Date(iso));
+      assert.strictEqual(reminderEngine.getMinutesUntilReset(parts('2026-11-13T12:30:00Z')), 690);
+      assert.strictEqual(reminderEngine.getMinutesUntilReset(parts('2026-11-13T17:30:00Z')), 390);
+      assert.strictEqual(reminderEngine.getMinutesUntilReset(parts('2026-11-13T20:30:00Z')), 210);
+      assert.strictEqual(reminderEngine.getMinutesUntilReset(parts('2026-11-13T23:50:00Z')), 10);
     });
 
-    test('getActiveSessionCookies filters out placeholder tokens from .env', () => {
-      const orig = config.leetcode.session;
-      try {
-        config.leetcode.session = 'your_session';
-        // When session.json doesn't exist, it should not return placeholder
-        if (!fs.existsSync(config.paths.session)) {
-          const res = sessionManager.getActiveSessionCookies();
-          assert.strictEqual(res, null, 'Should ignore placeholder token');
-        }
-      } finally {
-        config.leetcode.session = orig;
+    test('duration formatting is readable', () => {
+      assert.strictEqual(reminderEngine.formatDuration(690), '11h 30m');
+      assert.strictEqual(reminderEngine.formatDuration(165), '2h 45m');
+      assert.strictEqual(reminderEngine.formatDuration(10), '10m');
+    });
+
+    test('12-hour IST formatting is correct', () => {
+      const morning = reminderEngine.getISTParts(new Date('2026-11-13T18:30:00Z'));
+      const evening = reminderEngine.getISTParts(new Date('2026-11-13T12:30:00Z'));
+      assert.strictEqual(reminderEngine.formatIstTime(morning), '12:00 AM IST');
+      assert.strictEqual(reminderEngine.formatIstTime(evening), '6:00 PM IST');
+    });
+
+    console.log('\n--- Message content ---');
+    test('messages are plain text, status-first, and have no markdown', () => {
+      const ist = reminderEngine.getISTParts(new Date('2026-11-13T12:30:00Z'));
+      const evening = reminderEngine.buildReminderMessage({
+        window: WINDOW.EVENING,
+        ist,
+        dcc: { title: 'Two Sum', difficulty: 'Easy', link: 'https://leetcode.com/problems/two-sum/' },
+      });
+
+      assert(evening.includes("Today's LeetCode streak is pending"));
+      assert(evening.includes('Two Sum'));
+      assert(evening.includes('Reset: 5:30 AM IST'));
+
+      for (const window of [WINDOW.EVENING, WINDOW.LATE_EVENING, WINDOW.URGENT, WINDOW.CRITICAL]) {
+        const message = reminderEngine.buildReminderMessage({ window, ist, dcc: null });
+        assert(!message.includes('*'), `${window} message contains markdown asterisks`);
       }
     });
 
-    // Group 5: LeetCode API & Dynamic Resolution
-    console.log('\n--- Group 5: LeetCode API & Tri-State Architecture ---');
-    test('resolveUsername ignores placeholder values and resolves meta', () => {
-      sessionManager.saveSessionMeta({ username: 'valid_user_meta' });
-      const origUser = config.leetcode.username;
+    test('critical message shows the final-hours warning', () => {
+      const ist = reminderEngine.getISTParts(new Date('2026-11-13T21:15:00Z')); // 02:45 IST
+      const message = reminderEngine.buildReminderMessage({ window: WINDOW.CRITICAL, ist });
+      assert(message.includes('Final hours'));
+      assert(message.includes('Reset in 2h 45m'));
+      assert(message.includes('Solve any problem before 5:30 AM IST.'));
+    });
+
+    console.log('\n--- State handling ---');
+    test('a new streak day resets reminder state and drops old auto-submit fields', () => {
+      writeState({
+        streakDay: '2026-11-12',
+        firstReminderSentDay: '2026-11-12',
+        lastAlertTime: 12345,
+        pendingAlertDay: '2026-11-12',
+        autoSubmit: { attemptCount: 3, succeeded: true },
+        autoSubmitJitterMinutes: 150,
+      });
+
+      const state = reminderEngine.loadState(new Date('2026-11-13T12:30:00Z'));
+      assert.strictEqual(state.streakDay, '2026-11-13');
+      assert.strictEqual(state.firstReminderSentDay, null);
+      assert.strictEqual(state.lastAlertTime, 0);
+      assert.strictEqual(state.pendingAlertDay, null);
+      assert.strictEqual(state.autoSubmit, undefined);
+      assert.strictEqual(state.autoSubmitJitterMinutes, undefined);
+    });
+
+    test('same-day state keeps counters and drops old auto-submit fields', () => {
+      writeState({
+        streakDay: '2026-11-13',
+        lastAlertTime: 12345,
+        autoSubmit: { attemptCount: 3 },
+        autoSubmitJitterMinutes: 150,
+      });
+
+      const state = reminderEngine.loadState(new Date('2026-11-13T12:30:00Z'));
+      assert.strictEqual(state.lastAlertTime, 12345);
+      assert.strictEqual(state.autoSubmit, undefined);
+      assert.strictEqual(state.autoSubmitJitterMinutes, undefined);
+    });
+
+    console.log('\n--- Reminder gating ---');
+    await testAsync('evening reminder sends once per day and includes the challenge', async () => {
+      writeState();
+      const { messages, send } = collector();
+      const fetchDcc = async () => ({
+        title: 'Two Sum',
+        difficulty: 'Easy',
+        link: 'https://leetcode.com/problems/two-sum/',
+      });
+
+      const first = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T12:30:00Z'),
+        send,
+        fetchDcc,
+      });
+
+      assert.strictEqual(first.sent, true);
+      assert.strictEqual(first.window, WINDOW.EVENING);
+      assert(messages[0].includes("Today's LeetCode streak is pending"));
+      assert(messages[0].includes('Two Sum'));
+
+      const second = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T12:40:00Z'),
+        send,
+        fetchDcc,
+      });
+
+      assert.strictEqual(second.sent, false);
+      assert.strictEqual(messages.length, 1);
+    });
+
+    await testAsync('late-evening reminders respect the 30-minute interval', async () => {
+      writeState({
+        firstReminderSentDay: '2026-11-13',
+        lastAlertTime: new Date('2026-11-13T14:30:00Z').getTime(),
+      });
+      const { messages, send } = collector();
+
+      const early = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T14:40:00Z'),
+        send,
+      });
+      assert.strictEqual(early.sent, false);
+
+      const later = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T15:01:00Z'),
+        send,
+      });
+      assert.strictEqual(later.sent, true);
+      assert.strictEqual(later.window, WINDOW.LATE_EVENING);
+      assert.strictEqual(messages.length, 1);
+    });
+
+    await testAsync('critical reminders respect the 10-minute interval', async () => {
+      writeState({
+        firstReminderSentDay: '2026-11-13',
+        lastAlertTime: new Date('2026-11-13T19:30:00Z').getTime(),
+      });
+      const { messages, send } = collector();
+
+      const early = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T19:35:00Z'),
+        send,
+      });
+      assert.strictEqual(early.sent, false);
+
+      const later = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T19:41:00Z'),
+        send,
+      });
+      assert.strictEqual(later.sent, true);
+      assert.strictEqual(later.window, WINDOW.CRITICAL);
+      assert.strictEqual(messages.length, 1);
+      assert(messages[0].includes('Final hours'));
+    });
+
+    await testAsync('quiet hours send nothing', async () => {
+      writeState();
+      const { messages, send } = collector();
+
+      const result = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T06:30:00Z'), // 12:00 IST
+        send,
+      });
+
+      assert.strictEqual(result.sent, false);
+      assert.strictEqual(result.window, WINDOW.QUIET);
+      assert.strictEqual(messages.length, 0);
+    });
+
+    await testAsync('a failed Telegram send does not advance state', async () => {
+      writeState();
+      const now = new Date('2026-11-13T16:30:00Z'); // 22:00 IST
+
+      const result = await reminderEngine.processReminders({
+        now,
+        send: async () => false,
+      });
+
+      assert.strictEqual(result.sent, false);
+
+      const state = reminderEngine.loadState(now);
+      assert.strictEqual(state.lastAlertTime, 0);
+      assert.strictEqual(state.pendingAlertDay, null);
+    });
+
+    console.log('\n--- LeetCode API helpers ---');
+    test('streak reset timestamp is 00:00 UTC', () => {
+      const timestamp = leetcodeApi.getStreakResetTimestamp(new Date('2026-11-13T12:00:00Z'));
+      const expected = Math.floor(new Date('2026-11-13T00:00:00Z').getTime() / 1000);
+      assert.strictEqual(timestamp, expected);
+    });
+
+    test('resolveUsername ignores placeholders and uses session metadata', () => {
+      const originalUsername = config.leetcode.username;
+      const originalMeta = fs.existsSync(config.paths.sessionMeta)
+        ? fs.readFileSync(config.paths.sessionMeta, 'utf-8')
+        : null;
+
       try {
         config.leetcode.username = 'your_username';
-        const resolved = leetcodeApi.resolveUsername();
-        assert.strictEqual(resolved, 'valid_user_meta', 'Should resolve meta when env is a placeholder');
+        if (fs.existsSync(config.paths.sessionMeta)) fs.unlinkSync(config.paths.sessionMeta);
+        assert.strictEqual(leetcodeApi.resolveUsername(), null);
+
+        fs.writeFileSync(
+          config.paths.sessionMeta,
+          JSON.stringify({ username: 'valid_user_meta' }),
+          'utf-8'
+        );
+        assert.strictEqual(leetcodeApi.resolveUsername(), 'valid_user_meta');
       } finally {
-        config.leetcode.username = origUser;
+        config.leetcode.username = originalUsername;
+        if (originalMeta !== null) {
+          fs.writeFileSync(config.paths.sessionMeta, originalMeta, 'utf-8');
+        } else if (fs.existsSync(config.paths.sessionMeta)) {
+          fs.unlinkSync(config.paths.sessionMeta);
+        }
       }
     });
 
-    test('getStreakResetTimestamp accurately matches 00:00 UTC', () => {
-      const ts = leetcodeApi.getStreakResetTimestamp(new Date('2026-09-11T12:00:00Z'));
-      const expected = Math.floor(new Date('2026-09-11T00:00:00Z').getTime() / 1000);
-      assert.strictEqual(ts, expected);
-    });
+    await testAsync('checkSubmissionsToday returns ERROR when the username is missing', async () => {
+      const originalUsername = config.leetcode.username;
+      const originalMeta = fs.existsSync(config.paths.sessionMeta)
+        ? fs.readFileSync(config.paths.sessionMeta, 'utf-8')
+        : null;
 
-    // Group 6: Human Behavior & Stealth Plugin Registration
-    console.log('\n--- Group 6: Stealth & Human Behavior ---');
-    test('playwright-extra uses puppeteer-extra-plugin-stealth without crashing', () => {
-      assert(humanBehavior.chromium, 'chromium should be exported');
-      assert(typeof humanBehavior.simulateHuman === 'function');
-      assert(typeof humanBehavior.humanDwellTime === 'function');
-      assert(typeof humanBehavior.simulateMouseMovement === 'function');
-      assert(typeof humanBehavior.simulateScroll === 'function');
-    });
+      try {
+        config.leetcode.username = undefined;
+        if (fs.existsSync(config.paths.sessionMeta)) fs.unlinkSync(config.paths.sessionMeta);
 
-    // Group 7: Dry-Run and Fallback Integration
-    console.log('\n--- Group 7: Auto-Submit Architecture & Verification ---');
-    test('autoSubmit exports expected components', () => {
-      assert(typeof autoSubmit.performAutoSubmit === 'function');
-      assert(typeof autoSubmit.pollSubmissionResult === 'function');
-      assert(typeof autoSubmit.injectCodeIntoMonaco === 'function');
-      assert(typeof autoSubmit.triggerUiSubmit === 'function');
-      assert(typeof autoSubmit.submitViaInPageFetch === 'function');
+        const result = await leetcodeApi.checkSubmissionsToday();
+        assert.strictEqual(result.status, 'ERROR');
+        assert(result.message.includes('LEETCODE_USERNAME'));
+      } finally {
+        config.leetcode.username = originalUsername;
+        if (originalMeta !== null) {
+          fs.writeFileSync(config.paths.sessionMeta, originalMeta, 'utf-8');
+        } else if (fs.existsSync(config.paths.sessionMeta)) {
+          fs.unlinkSync(config.paths.sessionMeta);
+        }
+      }
     });
-
   } finally {
-    // Restore clean backups to avoid state pollution
     restoreBackups();
-    console.log('\n[INFO] Runtime files restored cleanly to pre-test state.');
+    console.log('\n[INFO] Runtime files restored to their pre-test state.');
   }
 
   console.log('\n====================================================');
@@ -316,7 +414,7 @@ print("PYTHON_VALIDATION_SUCCESS")
   }
 }
 
-runTests().catch((err) => {
-  console.error('Test suite failed:', err);
+runTests().catch((error) => {
+  console.error('Test suite failed:', error);
   process.exit(1);
 });

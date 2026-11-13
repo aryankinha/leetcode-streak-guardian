@@ -3,9 +3,7 @@ const axios = require('axios');
 const config = require('./config');
 const { chromium, randomDelay } = require('./humanBehavior');
 const { sendMessage } = require('./telegramNotifier');
-
-const DEFAULT_USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const { DEFAULT_USER_AGENT } = require('./constants');
 
 const USER_STATUS_QUERY = `
   query globalData {

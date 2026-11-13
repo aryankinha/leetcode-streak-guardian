@@ -1,67 +1,163 @@
 const fs = require('fs');
 const config = require('./config');
 const { sendMessage } = require('./telegramNotifier');
-const { performAutoSubmit } = require('./autoSubmit');
+const { getDailyCodingChallenge } = require('./leetcodeApi');
+const { LEETCODE_RESET_MINUTES_IST } = require('./constants');
+const { log } = require('./logger');
+
+const IST_TIME_ZONE = 'Asia/Kolkata';
+
+const WINDOW = {
+  QUIET: 'quiet',
+  EVENING: 'evening',
+  LATE_EVENING: 'late-evening',
+  URGENT: 'urgent',
+  CRITICAL: 'critical',
+};
+
+const istFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: IST_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
 
 /**
- * Parses current time in Asia/Kolkata (IST).
+ * Parses a date into IST parts. hourCycle h23 guarantees 00 at midnight.
  */
 function getISTParts(date = new Date()) {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-
   const parts = Object.fromEntries(
-    formatter.formatToParts(date).map((p) => [p.type, p.value])
+    istFormatter.formatToParts(date).map((part) => [part.type, part.value])
   );
+
+  const hour = parseInt(parts.hour, 10);
+  const minute = parseInt(parts.minute, 10);
 
   return {
     year: parseInt(parts.year, 10),
     month: parseInt(parts.month, 10),
     day: parseInt(parts.day, 10),
-    hour: parseInt(parts.hour, 10),
-    minute: parseInt(parts.minute, 10),
-    second: parseInt(parts.second, 10),
+    hour,
+    minute,
     istDateStr: `${parts.year}-${parts.month}-${parts.day}`,
-    totalMinutesFromMidnight: parseInt(parts.hour, 10) * 60 + parseInt(parts.minute, 10),
+    totalMinutesFromMidnight: hour * 60 + minute,
   };
 }
 
 /**
- * Returns the current LeetCode streak day.
- * LeetCode daily challenge resets at 00:00 UTC (05:30 AM IST).
- * Therefore, UTC date string (YYYY-MM-DD) perfectly corresponds to the streak day.
+ * The LeetCode streak day is the UTC date because LeetCode resets at 00:00 UTC.
  */
 function getLeetCodeStreakDay(date = new Date()) {
-  return date.toISOString().split('T')[0];
+  return date.toISOString().slice(0, 10);
+}
+
+function getReminderWindow(totalMinutes) {
+  if (totalMinutes >= 18 * 60 && totalMinutes < 20 * 60) return WINDOW.EVENING;
+  if (totalMinutes >= 20 * 60 && totalMinutes < 22 * 60) return WINDOW.LATE_EVENING;
+  if (totalMinutes >= 22 * 60 || totalMinutes < 60) return WINDOW.URGENT;
+  if (totalMinutes >= 60 && totalMinutes < LEETCODE_RESET_MINUTES_IST) return WINDOW.CRITICAL;
+  return WINDOW.QUIET;
+}
+
+function getReminderIntervalMinutes(window) {
+  switch (window) {
+    case WINDOW.LATE_EVENING:
+      return 30;
+    case WINDOW.URGENT:
+      return 15;
+    case WINDOW.CRITICAL:
+      return 10;
+    default:
+      return null;
+  }
+}
+
+function getMinutesUntilReset(ist) {
+  const now = ist.totalMinutesFromMidnight;
+  return now < LEETCODE_RESET_MINUTES_IST
+    ? LEETCODE_RESET_MINUTES_IST - now
+    : 24 * 60 - now + LEETCODE_RESET_MINUTES_IST;
+}
+
+function formatDuration(totalMinutes) {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) return `${minutes}m`;
+  return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+}
+
+function formatIstTime(ist) {
+  const hour12 = ist.hour % 12 || 12;
+  const suffix = ist.hour < 12 ? 'AM' : 'PM';
+  return `${hour12}:${String(ist.minute).padStart(2, '0')} ${suffix} IST`;
+}
+
+function buildReminderMessage({ window, ist, dcc = null }) {
+  const time = formatIstTime(ist);
+  const resetIn = formatDuration(getMinutesUntilReset(ist));
+
+  if (window === WINDOW.EVENING) {
+    const lines = [
+      "📌 Today's LeetCode streak is pending",
+      'No accepted submission today.',
+      `Time: ${time} | Reset: 5:30 AM IST (in ${resetIn})`,
+    ];
+
+    if (dcc?.title) {
+      lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})`);
+      lines.push(dcc.link);
+    }
+
+    return lines.join('\n');
+  }
+
+  if (window === WINDOW.LATE_EVENING) {
+    return [
+      "⏰ Today's LeetCode streak is still pending",
+      'No accepted submission today.',
+      `Time: ${time} | Reset in ${resetIn}`,
+    ].join('\n');
+  }
+
+  if (window === WINDOW.URGENT) {
+    return [
+      '⚠️ LeetCode streak expires soon',
+      'No accepted submission today.',
+      `Time: ${time} | Reset in ${resetIn}`,
+      'Solve any problem before 5:30 AM IST.',
+    ].join('\n');
+  }
+
+  return [
+    '🚨 Final hours: LeetCode streak is pending',
+    'No accepted submission today.',
+    `Time: ${time} | Reset in ${resetIn}`,
+    'Solve any problem before 5:30 AM IST.',
+  ].join('\n');
+}
+
+function buildDefaultState(streakDay) {
+  return {
+    streakDay,
+    firstReminderSentDay: null,
+    lastAlertTime: 0,
+    pendingAlertDay: null,
+    safeNotifiedDay: null,
+    lastErrorAlertTime: 0,
+  };
 }
 
 /**
- * Loads or initializes persistent runtime state (reminders, auto-submit counts, jitter).
+ * Loads reminder state and resets it when the LeetCode streak day changes.
  */
-function loadState() {
+function loadState(now = new Date()) {
   const filePath = config.paths.runtimeState;
-  const currentStreakDay = getLeetCodeStreakDay();
-
-  const defaultState = {
-    streakDay: currentStreakDay,
-    // Jitter between 2:15 AM (135 min) and 3:45 AM (225 min) in IST
-    autoSubmitJitterMinutes: Math.floor(Math.random() * (225 - 135 + 1)) + 135,
-    firstReminderSentDay: null,
-    lastAlertTime: 0,
-    autoSubmit: {
-      lastAttemptTime: 0,
-      attemptCount: 0,
-      succeeded: false,
-    },
-  };
+  const currentStreakDay = getLeetCodeStreakDay(now);
+  const defaultState = buildDefaultState(currentStreakDay);
 
   if (!fs.existsSync(filePath)) {
     saveState(defaultState);
@@ -69,165 +165,115 @@ function loadState() {
   }
 
   try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const state = JSON.parse(raw);
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const state = { ...defaultState, ...parsed };
 
-    // If day rolled over (new streak day after 00:00 UTC / 05:30 IST), reset daily counters
+    // Older versions stored auto-submit fields. They are no longer used.
+    delete state.autoSubmit;
+    delete state.autoSubmitJitterMinutes;
+
+    state.lastAlertTime = Number(state.lastAlertTime) || 0;
+    state.lastErrorAlertTime = Number(state.lastErrorAlertTime) || 0;
+
+    // A future timestamp (clock skew or a bad state file) would suppress
+    // every reminder until that time passes. Treat it as unset.
+    const nowMs = now.getTime();
+    if (state.lastAlertTime > nowMs) state.lastAlertTime = 0;
+    if (state.lastErrorAlertTime > nowMs) state.lastErrorAlertTime = 0;
+
     if (state.streakDay !== currentStreakDay) {
-      console.log(`[INFO] New LeetCode streak day detected: ${currentStreakDay} (was ${state.streakDay}). Resetting daily state.`);
-      state.streakDay = currentStreakDay;
-      state.autoSubmitJitterMinutes = Math.floor(Math.random() * (225 - 135 + 1)) + 135;
-      state.firstReminderSentDay = null;
-      state.autoSubmit = {
-        lastAttemptTime: 0,
-        attemptCount: 0,
-        succeeded: false,
-      };
-      saveState(state);
+      log(`[INFO] New streak day: ${currentStreakDay} (was ${state.streakDay}). Resetting reminder state.`);
+      const reset = buildDefaultState(currentStreakDay);
+      saveState(reset);
+      return reset;
     }
 
-    // Ensure nested autoSubmit object is always properly structured
-    state.autoSubmit = {
-      lastAttemptTime: state.autoSubmit?.lastAttemptTime || 0,
-      attemptCount: state.autoSubmit?.attemptCount || 0,
-      succeeded: state.autoSubmit?.succeeded || false,
-    };
-
     return state;
-  } catch (err) {
-    console.warn('[WARN] Failed to load runtime state, resetting:', err.message);
+  } catch (error) {
+    log(`[WARN] Could not read reminder state; starting fresh: ${error.message}`);
     saveState(defaultState);
     return defaultState;
   }
 }
 
-/**
- * Persists runtime state to runtime/state.json.
- */
 function saveState(state) {
   try {
     fs.writeFileSync(config.paths.runtimeState, JSON.stringify(state, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('[ERROR] Failed to write runtime/state.json:', err.message);
+  } catch (error) {
+    log(`[ERROR] Could not save reminder state: ${error.message}`);
   }
 }
 
 /**
- * Main reminder and auto-submit processor.
- * Schedule:
- * - 6:00 PM IST: Initial daily check (once per streak day)
- * - 8:00 PM - 10:00 PM IST: Hourly alerts
- * - 10:00 PM - 1:00 AM IST: Alerts every 15 minutes
- * - 1:00 AM - 5:30 AM IST: Alerts every 5 minutes
- * - 2:15 AM - 3:45 AM IST (with jitter): Auto-submit emergency streak saver
+ * Sends at most one reminder per configured interval, only inside the
+ * evening-to-reset window. State is advanced only after Telegram accepts
+ * the message, so a failed send is retried on the next run.
  */
-async function processReminders() {
-  const now = new Date();
+async function processReminders({
+  now = new Date(),
+  send = sendMessage,
+  fetchDcc = getDailyCodingChallenge,
+} = {}) {
   const ist = getISTParts(now);
   const streakDay = getLeetCodeStreakDay(now);
-  const state = loadState();
+  const state = loadState(now);
+  const window = getReminderWindow(ist.totalMinutesFromMidnight);
 
-  const timeStr = `${String(ist.hour).padStart(2, '0')}:${String(ist.minute).padStart(2, '0')}`;
-  console.log(`[INFO] Current IST: ${timeStr} | Streak Day (UTC): ${streakDay}`);
-
-  const hours = ist.hour;
-  const minutes = ist.minute;
-  const totalMinutes = ist.totalMinutesFromMidnight;
-  const currentTimestamp = now.getTime();
-
-  let shouldSendAlert = false;
-  let alertMessage = '';
-
-  // 1. Critical window: 1:00 AM to 5:30 AM IST
-  if (hours === 1 || (hours >= 2 && hours < 5) || (hours === 5 && minutes < 30)) {
-    // If auto-submit already succeeded for this streak day, streak is safe!
-    if (state.autoSubmit?.succeeded) {
-      console.log('[INFO] Auto-submit has already succeeded for this streak day. No critical alert needed.');
-      return;
-    }
-
-    // Alert every 5 minutes
-    if (currentTimestamp - state.lastAlertTime >= 5 * 60 * 1000) {
-      shouldSendAlert = true;
-      alertMessage = `🚨 *CRITICAL: LeetCode Streak at Risk!*\n\n` +
-        `You haven't solved a problem today.\n` +
-        `Current time: *${timeStr} IST* (Reset is at 05:30 AM IST).\n` +
-        `Solve one now to keep your streak alive!`;
-    }
-
-    // Auto-submit evaluation
-    const jitterThresholdMinutes = state.autoSubmitJitterMinutes || 150; // default 2:30 AM if missing
-    const hasReachedJitter = totalMinutes >= jitterThresholdMinutes;
-    const { lastAttemptTime, attemptCount, succeeded } = state.autoSubmit;
-    const cooldownMs = 30 * 60 * 1000; // 30 minutes cooldown between retries
-    const maxRetries = 3;
-
-    if (hasReachedJitter && !succeeded && attemptCount < maxRetries) {
-      const timeSinceLastAttempt = currentTimestamp - lastAttemptTime;
-
-      if (lastAttemptTime === 0 || timeSinceLastAttempt >= cooldownMs) {
-        console.log(`[INFO] Triggering auto-submit (Attempt ${attemptCount + 1}/${maxRetries}, Jitter threshold: ${Math.floor(jitterThresholdMinutes / 60)}:${String(jitterThresholdMinutes % 60).padStart(2, '0')} IST)...`);
-
-        // Update attempt timestamp and counter BEFORE running to prevent tight loops on failure
-        state.autoSubmit.lastAttemptTime = currentTimestamp;
-        state.autoSubmit.attemptCount += 1;
-        saveState(state);
-
-        const result = await performAutoSubmit();
-
-        if (result && result.success) {
-          state.autoSubmit.succeeded = true;
-          shouldSendAlert = false; // SUPPRESS CRITICAL ALERT ON SUCCESS
-          console.log('[INFO] Auto-submit succeeded and marked complete for this streak day.');
-        } else {
-          console.warn(`[WARN] Auto-submit attempt ${state.autoSubmit.attemptCount} failed. Cooldown active for 30 minutes.`);
-        }
-        saveState(state);
-      }
-    }
+  if (window === WINDOW.QUIET) {
+    log(`[INFO] Quiet hours (${formatIstTime(ist)}). No reminder.`);
+    return { sent: false, window };
   }
-  // 2. High urgency window: 10:00 PM to 1:00 AM IST
-  else if (hours >= 22 || hours === 0) {
-    if (currentTimestamp - state.lastAlertTime >= 15 * 60 * 1000) {
-      shouldSendAlert = true;
-      alertMessage = `⚠️ *WARNING: Streak Expiring Tonight!*\n\n` +
-        `You have not submitted a LeetCode problem yet.\n` +
-        `Current time: *${timeStr} IST*.\n` +
-        `Please submit a solution soon.`;
-    }
+
+  const intervalMinutes = getReminderIntervalMinutes(window);
+  const shouldSend = window === WINDOW.EVENING
+    ? state.firstReminderSentDay !== streakDay
+    : now.getTime() - state.lastAlertTime >= intervalMinutes * 60 * 1000;
+
+  if (!shouldSend) {
+    log(`[INFO] Reminder already sent for this window (${formatIstTime(ist)}).`);
+    return { sent: false, window };
   }
-  // 3. Moderate urgency window: 8:00 PM to 10:00 PM IST
-  else if (hours >= 20 && hours < 22) {
-    if (currentTimestamp - state.lastAlertTime >= 60 * 60 * 1000) {
-      shouldSendAlert = true;
-      alertMessage = `🔔 *Hourly Reminder: LeetCode Streak*\n\n` +
-        `Don't forget to solve your daily problem!\n` +
-        `Current time: *${timeStr} IST*.`;
-    }
-  }
-  // 4. Evening window: 6:00 PM to 8:00 PM IST
-  else if (hours >= 18 && hours < 20) {
-    // Send once per streak day
-    if (state.firstReminderSentDay !== streakDay) {
-      shouldSendAlert = true;
-      alertMessage = `ℹ️ *Daily LeetCode Check*\n\n` +
-        `You haven't submitted anything today yet.\n` +
-        `Time: *${timeStr} IST*. Take a few minutes to protect your streak!`;
-      state.firstReminderSentDay = streakDay;
+
+  let dcc = null;
+  if (window === WINDOW.EVENING) {
+    try {
+      dcc = await fetchDcc();
+    } catch {
+      dcc = null;
     }
   }
 
-  if (shouldSendAlert && alertMessage) {
-    console.log(`[INFO] Sending reminder alert for time ${timeStr} IST...`);
-    await sendMessage(alertMessage);
-    state.lastAlertTime = currentTimestamp;
-    saveState(state);
+  const message = buildReminderMessage({ window, ist, dcc });
+  const sent = await send(message);
+
+  if (!sent) {
+    log(`[WARN] Reminder not sent (${formatIstTime(ist)}). It will retry on the next run.`);
+    return { sent: false, window, message };
   }
+
+  state.lastAlertTime = now.getTime();
+  state.pendingAlertDay = streakDay;
+
+  if (window === WINDOW.EVENING) {
+    state.firstReminderSentDay = streakDay;
+  }
+
+  saveState(state);
+  log(`[INFO] Reminder sent (${formatIstTime(ist)}).`);
+
+  return { sent: true, window, message };
 }
 
 module.exports = {
+  WINDOW,
   getISTParts,
   getLeetCodeStreakDay,
+  getReminderWindow,
+  getReminderIntervalMinutes,
+  getMinutesUntilReset,
+  formatDuration,
+  formatIstTime,
+  buildReminderMessage,
   loadState,
   saveState,
   processReminders,

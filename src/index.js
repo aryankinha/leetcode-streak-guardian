@@ -1,81 +1,48 @@
+/**
+ * Local long-running scheduler. Use this on a VPS or your own machine.
+ * GitHub Actions uses runOnce.js instead.
+ */
 const cron = require('node-cron');
-const fs = require('fs');
 const config = require('./config');
-const { checkSubmissionsToday, resolveUsername, getDailyCodingChallenge } = require('./leetcodeApi');
-const { processReminders } = require('./reminderEngine');
-const { sendMessage } = require('./telegramNotifier');
-const { getActiveSessionCookies } = require('./sessionManager');
+const { runGuardianCycle } = require('./guardian');
+const { resolveUsername } = require('./leetcodeApi');
+const { getISTParts, formatIstTime } = require('./reminderEngine');
+const { log } = require('./logger');
 
-// Mutex lock to prevent overlapping runs
 let isChecking = false;
-
-function logToFile(message) {
-  const timestamp = new Date().toISOString();
-  const formattedMessage = `[${timestamp}] ${message}\n`;
-  console.log(message);
-  try {
-    fs.appendFileSync(config.paths.logs, formattedMessage);
-  } catch (err) {
-    console.error('Failed to write to log file:', err.message);
-  }
-}
 
 async function main() {
   if (isChecking) {
-    logToFile('[WARN] Previous guardian cycle is still active. Skipping overlapping run.');
+    log('[WARN] Previous cycle is still running. Skipping this run.');
     return;
   }
 
   isChecking = true;
-  logToFile('[INFO] 🔍 Starting LeetCode Streak Guardian check...');
 
   try {
-    const result = await checkSubmissionsToday();
-
-    if (result.status === 'SOLVED') {
-      const title = result.submission?.title || 'Unknown problem';
-      logToFile(`[INFO] ✅ User "${result.username}" already solved "${title}" today. Streak is safe.`);
-    } else if (result.status === 'UNSOLVED') {
-      logToFile(`[INFO] ⏳ No accepted submission found today for "${result.username}". Evaluating reminders...`);
-      try {
-        const dcc = await getDailyCodingChallenge();
-        if (dcc && dcc.title) {
-          logToFile(`[INFO] 📌 Today's Daily Challenge: "${dcc.title}" (${dcc.difficulty}) - ${dcc.link}`);
-        }
-      } catch (e) {
-        // Ignore
-      }
-      await processReminders();
-    } else if (result.status === 'ERROR') {
-      logToFile(`[WARN] ⚠️ Could not verify submissions: ${result.message}. Skipping alerts this cycle to prevent false alarms.`);
-    }
+    const result = await runGuardianCycle();
+    log(`[INFO] Cycle finished: ${result.status}`);
   } catch (error) {
-    logToFile(`[ERROR] Critical failure in main process: ${error.message}`);
-    await sendMessage(`🚨 CRITICAL ERROR: LeetCode Streak Guardian encountered an issue: ${error.message}`);
+    log(`[ERROR] Cycle failed: ${error.message}`);
   } finally {
     isChecking = false;
-    logToFile('[INFO] Check cycle finished.');
   }
 }
 
-// Scheduled task every CHECK_INTERVAL minutes
-cron.schedule(`*/${config.checkInterval} * * * *`, async () => {
-  await main();
-});
+const interval = config.checkInterval;
+cron.schedule(`*/${interval} * * * *`, main);
 
-// Startup Banner and First Run
-const activeAuth = getActiveSessionCookies();
-const activeUsername = resolveUsername() || '(unconfigured)';
-logToFile('======================================================');
-logToFile(`[INFO] 🛡️  LeetCode Streak Guardian Started`);
-logToFile(`[INFO] Username:     ${activeUsername}`);
-logToFile(`[INFO] Auth Mode:    ${activeAuth ? activeAuth.mode.toUpperCase() : 'NONE'}`);
-logToFile(`[INFO] Interval:     Every ${config.checkInterval} minutes`);
-logToFile(`[INFO] Timezone:     Asia/Kolkata (IST reset at 05:30)`);
-logToFile('======================================================');
+const username = resolveUsername() || '(not configured)';
+const ist = getISTParts();
 
-main().catch((err) => {
-  console.error('[ERROR] Initial execution failed:', err);
-});
+log('======================================================');
+log('LeetCode Streak Guardian (reminders only)');
+log(`User: ${username}`);
+log(`Interval: every ${interval} minutes`);
+log(`Time: ${formatIstTime(ist)}`);
+log('Reminder window: 6:00 PM to 5:30 AM IST');
+log('======================================================');
 
-module.exports = { main, isChecking: () => isChecking };
+main();
+
+module.exports = { main };

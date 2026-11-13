@@ -1,124 +1,121 @@
-# leetcode-streak-guardian
+# LeetCode Streak Guardian
 
-LeetCode Streak Guardian runs on a schedule and protects streaks by checking daily submissions, sending progressive reminders, and attempting an emergency auto-submit after 2 AM IST.
+Checks your LeetCode submissions every 10 minutes during the evening and overnight, then sends short Telegram reminders until you solve a problem. No auto-submit.
 
-## Core Architecture
-
-```text
-GitHub Action (every 10 min)
-  -> check submissions (GraphQL recentSubmissionList)
-  -> submitted today? yes -> exit
-  -> no -> reminder engine
-  -> after 2 AM IST -> playwright submit
-```
-
-## Project Structure
+## How it works
 
 ```text
-src/
-  index.js
-  config.js
-  leetcodeApi.js
-  reminderEngine.js
-  playwrightSubmit.js
-  telegramNotifier.js
-scripts/
-  generateSession.js
+GitHub Actions (every 10 min, 5:30 PM - 5:20 AM IST)
+  -> check recent accepted submissions
+  -> solved? exit
+  -> not solved? send the next reminder for the current time window
 ```
 
-## Authentication Setup (Session Only)
+LeetCode resets the daily streak at **05:30 AM IST** (00:00 UTC). The bot stops reminding after that.
 
-This project never performs automated email/password login in CI.
-Authentication uses `LEETCODE_STORAGE_STATE` only.
+## Reminder schedule (IST)
 
-1. Generate session locally:
+| Time | Behaviour |
+| --- | --- |
+| 6:00 PM - 8:00 PM | One reminder, with today's daily challenge link |
+| 8:00 PM - 10:00 PM | Every 30 minutes |
+| 10:00 PM - 1:00 AM | Every 15 minutes |
+| 1:00 AM - 5:30 AM | Every 10 minutes |
+| 5:30 AM - 6:00 PM | Quiet |
+
+A "streak safe" message is sent once if you solve after receiving a reminder.
+
+## Message format
+
+Messages are plain text and contain only the current status, time, and reset countdown. Example:
+
+```text
+📌 Today's LeetCode streak is pending
+No accepted submission today.
+Time: 6:15 PM IST | Reset: 5:30 AM IST (in 11h 15m)
+Challenge: Climbing Stairs II (Medium)
+https://leetcode.com/problems/climbing-stairs-ii/
+```
+
+## Setup
+
+### 1. Install
 
 ```bash
-npm run generate:session
+npm ci --omit=dev
 ```
 
-Login manually in the opened browser, then press Enter in terminal.
-This creates `session.json`.
+The reminder bot only needs `axios`, `dotenv`, and `node-cron`. Playwright is a dev dependency used by the optional local auto-submit scripts.
 
-2. Add GitHub Secret:
+### 2. Local environment
 
-- Settings -> Secrets and variables -> Actions
-- Secret name: `LEETCODE_STORAGE_STATE`
-- Value: full contents of `session.json`
+Copy `.env.example` to `.env` and set:
 
-3. Runtime behavior:
+```env
+LEETCODE_USERNAME=your_leetcode_username
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+```
 
-- If session missing/invalid/expired -> one Telegram alert per day, automation stops for the run.
-- No login retries, no credential form automation.
+### 3. GitHub Actions secrets
 
-## Environment Variables
+In the repository, go to **Settings -> Secrets and variables -> Actions** and add:
 
-Required:
-
-- `LEETCODE_USERNAME`
-- `LEETCODE_STORAGE_STATE`
+- `LEETCODE_USERNAME` (repository variable or secret)
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-Optional:
+No LeetCode session or password is needed for reminders.
 
-- `CHECK_INTERVAL` (default `10`)
-- `USE_INTERNAL_CRON` (default `false`)
-- `AUTO_SUBMIT_RETRY_MINUTES` (default `15`)
-- `LOCK_STALE_MINUTES` (default `25`)
+### 4. Run
 
-## Reminder Schedule (IST)
-
-- Before 8 PM: no reminders
-- 8 PM to 10 PM: every hour
-- 10 PM to 1 AM: every 30 minutes
-- 1 AM to 2 AM: every 5 minutes
-- 2 AM onward: emergency stage + auto-submit attempts
-
-## Dynamic Problem Selection
-
-Auto-submit does not use a fixed hardcoded problem only.
-It fetches `recentSubmissionList` and selects the latest `titleSlug`:
-
-- if latest submission exists: `https://leetcode.com/problems/<titleSlug>/`
-- if unavailable: fallback to `https://leetcode.com/problems/two-sum/`
-
-## Submit Reliability
-
-Playwright auto-submit flow:
-
-1. Launch browser with session storage state
-2. Open selected problem page
-3. Wait for editor (`.monaco-editor`, `[data-cy=\"code-area\"]`, `textarea`)
-4. Find submit button using fallback selectors:
-   - `[data-e2e-locator=\"console-submit-button\"]`
-   - `[data-cy=\"submit-code-btn\"]`
-   - `button:has-text(\"Submit\")`
-   - `button:has-text(\"Submit Code\")`
-5. Ensure button is visible and enabled, scroll into view, apply human-like delay
-6. Click submit and detect result via network (`POST /submit/`) or verdict text
+```bash
+npm start      # local scheduler, every 10 minutes
+npm run once   # one cycle only
+npm test       # test suite
+```
 
 ## GitHub Actions
 
-Workflow should pass only:
+The workflow runs `*/10 12-23 * * *` UTC, which is **5:30 PM to 5:20 AM IST** — the full reminder window, with no wasted runs during the day. Frequent runs also survive GitHub's scheduled-job delays.
 
-- `LEETCODE_USERNAME`
-- `LEETCODE_STORAGE_STATE`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-
-## Commands
-
-Install and run once:
+You can trigger a test message manually:
 
 ```bash
-npm install
-npm run install:browsers
-npm start
+gh workflow run guardian.yml -f test_alert=true
 ```
 
-Generate session:
+### Keep the workflow enabled
+
+GitHub disables scheduled workflows in public repositories after **60 days without a push**. Push any commit at least once every two months, or move the scheduler to a small always-on host if you want zero maintenance.
+
+## State
+
+Reminder state is stored in `runtime/state.json` and restored between GitHub Actions runs with the Actions cache. It contains only reminder timestamps; no credentials are cached.
+
+## Optional: manual auto-submit scripts
+
+The auto-submit code is still in the repository for local experimentation, but it is **not** part of the scheduled flow. To use it locally:
 
 ```bash
-npm run generate:session
+npm install          # installs dev dependencies, including Playwright
+npx playwright install chromium
+npm run login
+npm run test-submit -- --dry-run
+```
+
+## Project structure
+
+```text
+src/
+  index.js           local cron entry point
+  runOnce.js         GitHub Actions / one-shot entry point
+  guardian.js        check submissions + decide whether to notify
+  reminderEngine.js  IST windows, state, message text
+  leetcodeApi.js     LeetCode GraphQL client
+  telegramNotifier.js
+  config.js
+  logger.js
+test/
+  guardian.test.js
 ```
