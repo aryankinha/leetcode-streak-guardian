@@ -38,8 +38,40 @@ async function notifyVerificationErrorOnce(message) {
 }
 
 /**
+ * Builds the streak-safe confirmation. Wrong answers keep the streak too,
+ * so the wording distinguishes accepted submissions from other submissions.
+ */
+function buildStreakSafeMessage(submission, streakDay) {
+  if (submission?.accepted) {
+    return [
+      '✅ LeetCode streak safe',
+      `Accepted: ${submission.title}`,
+      `Date: ${streakDay}`,
+      'Well done, sir.',
+    ].join('\n');
+  }
+
+  if (submission?.title) {
+    const status = submission.statusDisplay ? ` (${submission.statusDisplay})` : '';
+    return [
+      '✅ LeetCode streak safe',
+      `Submitted: ${submission.title}${status}`,
+      `Date: ${streakDay}`,
+      'Streak secured, sir.',
+    ].join('\n');
+  }
+
+  return [
+    '✅ LeetCode streak safe',
+    'Submission recorded today',
+    `Date: ${streakDay}`,
+    'Streak secured, sir.',
+  ].join('\n');
+}
+
+/**
  * Confirms the streak is safe, but only if the user was already reminded today.
- * If they solve before the first reminder, no extra message is sent.
+ * If they submit before the first reminder, no extra message is sent.
  */
 async function notifyStreakSafe(submission) {
   const state = loadState();
@@ -49,10 +81,7 @@ async function notifyStreakSafe(submission) {
     return false;
   }
 
-  const title = submission?.title || 'Accepted submission';
-  const sent = await sendMessage(
-    `✅ LeetCode streak safe\nAccepted: ${title}\nDate: ${streakDay}\nWell done, sir.`
-  );
+  const sent = await sendMessage(buildStreakSafeMessage(submission, streakDay));
 
   if (sent) {
     state.safeNotifiedDay = streakDay;
@@ -66,15 +95,18 @@ async function sendTestAlert() {
   const ist = getISTParts();
   const result = await checkSubmissionsToday();
 
-  if (result.status === 'SOLVED') {
-    return sendMessage(
-      `✅ Test alert: today's LeetCode streak is safe\nAccepted: ${result.submission?.title || 'Unknown'}`
-    );
+  if (result.status === 'SAFE') {
+    const submission = result.submission;
+    const detail = submission?.accepted
+      ? `Accepted: ${submission.title}`
+      : `Submitted: ${submission?.title || 'unknown'} (${submission?.statusDisplay || 'not accepted'})`;
+
+    return sendMessage(`✅ Test alert: today's LeetCode streak is safe\n${detail}`);
   }
 
-  if (result.status === 'UNSOLVED') {
+  if (result.status === 'PENDING') {
     return sendMessage(
-      `📌 Test alert: today's LeetCode streak is pending\nNo accepted submission today.\nTime: ${formatIstTime(ist)}`
+      `📌 Test alert: today's LeetCode streak is pending\nNo submission today.\nTime: ${formatIstTime(ist)}`
     );
   }
 
@@ -91,10 +123,12 @@ async function runGuardianCycle({ testAlert = false } = {}) {
     log("[INFO] Checking today's LeetCode submissions...");
     const result = await checkSubmissionsToday();
 
-    if (result.status === 'SOLVED') {
-      log(`[INFO] Streak safe: ${result.submission?.title || 'accepted submission'}.`);
+    if (result.status === 'SAFE') {
+      const title = result.submission?.title || 'submission';
+      const status = result.submission?.statusDisplay || 'unknown status';
+      log(`[INFO] Streak safe: ${title} (${status}).`);
       await notifyStreakSafe(result.submission);
-      return { ok: true, status: 'SOLVED' };
+      return { ok: true, status: 'SAFE' };
     }
 
     if (result.status === 'ERROR') {
@@ -103,9 +137,9 @@ async function runGuardianCycle({ testAlert = false } = {}) {
       return { ok: false, status: 'ERROR', message: result.message };
     }
 
-    log('[INFO] No accepted submission today. Checking the reminder window...');
+    log('[INFO] No submission today. Checking the reminder window...');
     const reminder = await processReminders();
-    return { ok: true, status: 'UNSOLVED', reminder };
+    return { ok: true, status: 'PENDING', reminder };
   } catch (error) {
     log(`[ERROR] Guardian cycle failed: ${error.message}`);
     await notifyVerificationErrorOnce(error.message);
@@ -115,6 +149,7 @@ async function runGuardianCycle({ testAlert = false } = {}) {
 
 module.exports = {
   runGuardianCycle,
+  buildStreakSafeMessage,
   notifyVerificationErrorOnce,
   notifyStreakSafe,
 };

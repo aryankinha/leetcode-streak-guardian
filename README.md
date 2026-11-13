@@ -1,23 +1,27 @@
 # LeetCode Streak Guardian
 
-Checks your LeetCode submissions every 10 minutes from morning to just before the streak reset, then sends short Telegram reminders until you solve a problem. No auto-submit.
+Checks whether you have submitted anything on LeetCode every 10 minutes from morning to just before the streak reset, then sends short Telegram reminders until you do. No login, no auto-submit.
 
 ## How it works
 
 ```text
 GitHub Actions (every 10 min, 9:30 AM - 5:20 AM IST)
-  -> check recent accepted submissions
-  -> solved? exit
-  -> not solved? send the next reminder for the current time window
+  -> check today's submissions (any status counts)
+  -> submitted? exit
+  -> not yet? send the next reminder for the current time window
 ```
 
 LeetCode resets the daily streak at **05:30 AM IST** (00:00 UTC). The bot stops reminding after that.
+
+## What counts for the streak
+
+LeetCode's daily streak is activity-based, not acceptance-based. A **Wrong Answer** keeps the streak alive just like an Accepted submission, and so do Time Limit Exceeded, Memory Limit Exceeded, and Runtime Error. The bot reads the recent submission list, so it stops reminding as soon as any submission is recorded for the day.
 
 ## Reminder schedule (IST)
 
 | Time | Behaviour |
 | --- | --- |
-| 9:30 AM - 5:30 PM | Every 60 minutes |
+| 9:30 AM - 5:30 PM | Every 60 minutes; the morning reminder includes today's challenge |
 | 5:30 PM - 6:00 PM | Quiet |
 | 6:00 PM - 8:00 PM | One reminder, with today's daily challenge link |
 | 8:00 PM - 10:00 PM | Every 30 minutes |
@@ -25,7 +29,7 @@ LeetCode resets the daily streak at **05:30 AM IST** (00:00 UTC). The bot stops 
 | 1:00 AM - 5:30 AM | Every 10 minutes |
 | 5:30 AM - 9:30 AM | Quiet |
 
-A "streak safe" message is sent once if you solve after receiving a reminder.
+A "streak safe" message is sent once if you submit after receiving a reminder.
 
 ## Message format
 
@@ -34,16 +38,25 @@ Messages are plain text and contain only the current status, time, and reset cou
 ```text
 Good morning, sir,
 📌 Today's LeetCode streak is pending
-No accepted submission today.
+No submission today.
 Time: 9:30 AM IST | Reset in 20h 00m
+Challenge: Climbing Stairs II (Medium)
+https://leetcode.com/problems/climbing-stairs-ii/
 ```
 
 ```text
 📌 Today's LeetCode streak is pending
-No accepted submission today, sir.
+No submission today, sir.
 Time: 6:15 PM IST | Reset: 5:30 AM IST (in 11h 15m)
 Challenge: Climbing Stairs II (Medium)
 https://leetcode.com/problems/climbing-stairs-ii/
+```
+
+```text
+✅ LeetCode streak safe
+Submitted: Climbing Stairs II (Wrong Answer)
+Date: 2026-11-14
+Streak secured, sir.
 ```
 
 ## Setup
@@ -54,7 +67,7 @@ https://leetcode.com/problems/climbing-stairs-ii/
 npm ci --omit=dev
 ```
 
-The reminder bot only needs `axios`, `dotenv`, and `node-cron`. Playwright is a dev dependency used by the optional local auto-submit scripts.
+The reminder bot only needs `axios`, `dotenv`, and `node-cron`.
 
 ### 2. Local environment
 
@@ -102,17 +115,6 @@ GitHub disables scheduled workflows in public repositories after **60 days witho
 
 Reminder state is stored in `runtime/state.json` and restored between GitHub Actions runs with the Actions cache. It contains only reminder timestamps; no credentials are cached.
 
-## Optional: manual auto-submit scripts
-
-The auto-submit code is still in the repository for local experimentation, but it is **not** part of the scheduled flow. To use it locally:
-
-```bash
-npm install          # installs dev dependencies, including Playwright
-npx playwright install chromium
-npm run login
-npm run test-submit -- --dry-run
-```
-
 ## Project structure
 
 ```text
@@ -123,6 +125,7 @@ src/
   reminderEngine.js  IST windows, state, message text
   leetcodeApi.js     LeetCode GraphQL client
   telegramNotifier.js
+  constants.js
   config.js
   logger.js
 test/

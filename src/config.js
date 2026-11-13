@@ -22,9 +22,6 @@ function parseCheckInterval(value) {
 module.exports = {
   leetcode: {
     username: process.env.LEETCODE_USERNAME,
-    // Optional: only needed by the local auto-submit scripts, not by reminders.
-    session: process.env.LEETCODE_SESSION,
-    csrfToken: process.env.LEETCODE_CSRF_TOKEN,
     graphqlUrl: 'https://leetcode.com/graphql',
   },
   telegram: {
@@ -35,9 +32,6 @@ module.exports = {
   paths: {
     runtimeDir,
     logsDir,
-    session: path.join(runtimeDir, 'session.json'),
-    sessionMeta: path.join(runtimeDir, 'session-meta.json'),
-    submissionHistory: path.join(runtimeDir, 'submission-history.json'),
     runtimeState: path.join(runtimeDir, 'state.json'),
     logs: path.join(logsDir, 'app.log'),
   },

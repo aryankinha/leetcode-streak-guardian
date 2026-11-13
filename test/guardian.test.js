@@ -3,6 +3,7 @@ const fs = require('fs');
 const config = require('../src/config');
 const reminderEngine = require('../src/reminderEngine');
 const leetcodeApi = require('../src/leetcodeApi');
+const guardian = require('../src/guardian');
 
 const { WINDOW } = reminderEngine;
 
@@ -21,21 +22,12 @@ async function runTests() {
   const backupState = fs.existsSync(config.paths.runtimeState)
     ? fs.readFileSync(config.paths.runtimeState, 'utf-8')
     : null;
-  const backupMeta = fs.existsSync(config.paths.sessionMeta)
-    ? fs.readFileSync(config.paths.sessionMeta, 'utf-8')
-    : null;
 
   function restoreBackups() {
     if (backupState !== null) {
       fs.writeFileSync(config.paths.runtimeState, backupState, 'utf-8');
     } else if (fs.existsSync(config.paths.runtimeState)) {
       fs.unlinkSync(config.paths.runtimeState);
-    }
-
-    if (backupMeta !== null) {
-      fs.writeFileSync(config.paths.sessionMeta, backupMeta, 'utf-8');
-    } else if (fs.existsSync(config.paths.sessionMeta)) {
-      fs.unlinkSync(config.paths.sessionMeta);
     }
   }
 
@@ -100,7 +92,7 @@ async function runTests() {
 
     test('config exposes the expected state paths', () => {
       assert(config.paths.runtimeState.endsWith('state.json'));
-      assert(config.paths.sessionMeta.endsWith('session-meta.json'));
+      assert(config.paths.logs.endsWith('app.log'));
     });
 
     test('check interval is clamped to a valid cron range', () => {
@@ -198,28 +190,39 @@ async function runTests() {
       for (const window of [WINDOW.DAYTIME, WINDOW.EVENING, WINDOW.LATE_EVENING, WINDOW.URGENT, WINDOW.CRITICAL]) {
         const message = reminderEngine.buildReminderMessage({ window, ist, dcc: null });
         assert(!message.includes('*'), `${window} message contains markdown asterisks`);
+        assert(!/accepted submission/i.test(message), `${window} message wrongly requires acceptance`);
       }
     });
 
     test('morning reminders greet you, afternoon reminders stay brief', () => {
+      const dcc = {
+        title: 'Two Sum',
+        difficulty: 'Easy',
+        link: 'https://leetcode.com/problems/two-sum/',
+      };
       const morning = reminderEngine.getISTParts(new Date('2026-11-13T04:30:00Z')); // 10:00 IST
       const morningMessage = reminderEngine.buildReminderMessage({
         window: WINDOW.DAYTIME,
         ist: morning,
+        dcc,
       });
 
       assert(morningMessage.startsWith('Good morning, sir,'));
-      assert(morningMessage.includes('No accepted submission today.'));
+      assert(morningMessage.includes('No submission today.'));
+      assert(morningMessage.includes('Challenge: Two Sum (Easy)'));
+      assert(morningMessage.includes('https://leetcode.com/problems/two-sum/'));
       assert(!morningMessage.includes('today, sir'));
 
       const afternoon = reminderEngine.getISTParts(new Date('2026-11-13T09:30:00Z')); // 15:00 IST
       const afternoonMessage = reminderEngine.buildReminderMessage({
         window: WINDOW.DAYTIME,
         ist: afternoon,
+        dcc,
       });
 
       assert(!afternoonMessage.includes('Good morning'));
-      assert(afternoonMessage.includes('No accepted submission today, sir.'));
+      assert(afternoonMessage.includes('No submission today, sir.'));
+      assert(!afternoonMessage.includes('Challenge:'));
     });
 
     test('critical message shows the final-hours warning', () => {
@@ -300,22 +303,30 @@ async function runTests() {
         lastAlertTime: new Date('2026-11-13T04:30:00Z').getTime(), // 10:00 AM IST
       });
       const { messages, send } = collector();
+      const fetchDcc = async () => ({
+        title: 'Two Sum',
+        difficulty: 'Easy',
+        link: 'https://leetcode.com/problems/two-sum/',
+      });
 
       const early = await reminderEngine.processReminders({
         now: new Date('2026-11-13T05:00:00Z'), // 10:30 AM IST
         send,
+        fetchDcc,
       });
       assert.strictEqual(early.sent, false);
 
       const later = await reminderEngine.processReminders({
         now: new Date('2026-11-13T05:31:00Z'), // 11:01 AM IST
         send,
+        fetchDcc,
       });
       assert.strictEqual(later.sent, true);
       assert.strictEqual(later.window, WINDOW.DAYTIME);
       assert.strictEqual(messages.length, 1);
       assert(messages[0].includes("Today's LeetCode streak is pending"));
       assert(messages[0].includes('11:01 AM IST'));
+      assert(messages[0].includes('Challenge: Two Sum (Easy)'));
     });
 
     await testAsync('late-evening reminders respect the 30-minute interval', async () => {
@@ -400,53 +411,92 @@ async function runTests() {
       assert.strictEqual(timestamp, expected);
     });
 
-    test('resolveUsername ignores placeholders and uses session metadata', () => {
+    test('resolveUsername reads the environment and ignores placeholders', () => {
       const originalUsername = config.leetcode.username;
-      const originalMeta = fs.existsSync(config.paths.sessionMeta)
-        ? fs.readFileSync(config.paths.sessionMeta, 'utf-8')
-        : null;
 
       try {
         config.leetcode.username = 'your_username';
-        if (fs.existsSync(config.paths.sessionMeta)) fs.unlinkSync(config.paths.sessionMeta);
         assert.strictEqual(leetcodeApi.resolveUsername(), null);
 
-        fs.writeFileSync(
-          config.paths.sessionMeta,
-          JSON.stringify({ username: 'valid_user_meta' }),
-          'utf-8'
-        );
-        assert.strictEqual(leetcodeApi.resolveUsername(), 'valid_user_meta');
+        config.leetcode.username = '  valid_user  ';
+        assert.strictEqual(leetcodeApi.resolveUsername(), 'valid_user');
+
+        config.leetcode.username = '';
+        assert.strictEqual(leetcodeApi.resolveUsername(), null);
       } finally {
         config.leetcode.username = originalUsername;
-        if (originalMeta !== null) {
-          fs.writeFileSync(config.paths.sessionMeta, originalMeta, 'utf-8');
-        } else if (fs.existsSync(config.paths.sessionMeta)) {
-          fs.unlinkSync(config.paths.sessionMeta);
-        }
       }
+    });
+
+    test('any submission today counts, including Wrong Answer', () => {
+      const reset = Math.floor(new Date('2026-11-13T00:00:00Z').getTime() / 1000);
+      const submissions = [
+        {
+          id: '2',
+          title: 'Two Sum',
+          titleSlug: 'two-sum',
+          timestamp: String(reset + 60),
+          statusDisplay: 'Wrong Answer',
+        },
+        {
+          id: '1',
+          title: 'Two Sum',
+          titleSlug: 'two-sum',
+          timestamp: String(reset - 60),
+          statusDisplay: 'Accepted',
+        },
+      ];
+
+      const today = leetcodeApi.findTodaySubmission(submissions, reset);
+      assert.strictEqual(today.id, '2');
+
+      const normalized = leetcodeApi.normalizeSubmission(today);
+      assert.strictEqual(normalized.accepted, false);
+      assert.strictEqual(normalized.statusDisplay, 'Wrong Answer');
+    });
+
+    test('submissions before the reset do not count for today', () => {
+      const reset = Math.floor(new Date('2026-11-13T00:00:00Z').getTime() / 1000);
+      const submissions = [
+        {
+          id: '1',
+          title: 'Two Sum',
+          titleSlug: 'two-sum',
+          timestamp: String(reset - 1),
+          statusDisplay: 'Accepted',
+        },
+      ];
+
+      assert.strictEqual(leetcodeApi.findTodaySubmission(submissions, reset), null);
+    });
+
+    test('streak-safe message distinguishes accepted from other submissions', () => {
+      const accepted = guardian.buildStreakSafeMessage(
+        { title: 'Two Sum', accepted: true, statusDisplay: 'Accepted' },
+        '2026-11-14'
+      );
+      assert(accepted.includes('Accepted: Two Sum'));
+      assert(accepted.includes('Well done, sir.'));
+
+      const wrong = guardian.buildStreakSafeMessage(
+        { title: 'Two Sum', accepted: false, statusDisplay: 'Wrong Answer' },
+        '2026-11-14'
+      );
+      assert(wrong.includes('Submitted: Two Sum (Wrong Answer)'));
+      assert(wrong.includes('Streak secured, sir.'));
     });
 
     await testAsync('checkSubmissionsToday returns ERROR when the username is missing', async () => {
       const originalUsername = config.leetcode.username;
-      const originalMeta = fs.existsSync(config.paths.sessionMeta)
-        ? fs.readFileSync(config.paths.sessionMeta, 'utf-8')
-        : null;
 
       try {
         config.leetcode.username = undefined;
-        if (fs.existsSync(config.paths.sessionMeta)) fs.unlinkSync(config.paths.sessionMeta);
 
         const result = await leetcodeApi.checkSubmissionsToday();
         assert.strictEqual(result.status, 'ERROR');
         assert(result.message.includes('LEETCODE_USERNAME'));
       } finally {
         config.leetcode.username = originalUsername;
-        if (originalMeta !== null) {
-          fs.writeFileSync(config.paths.sessionMeta, originalMeta, 'utf-8');
-        } else if (fs.existsSync(config.paths.sessionMeta)) {
-          fs.unlinkSync(config.paths.sessionMeta);
-        }
       }
     });
   } finally {

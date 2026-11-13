@@ -1,16 +1,16 @@
 const axios = require('axios');
-const fs = require('fs');
 const config = require('./config');
 const { DEFAULT_USER_AGENT } = require('./constants');
 const { log } = require('./logger');
 
 const RECENT_SUBMISSIONS_QUERY = `
-  query recentAcSubmissions($username: String!, $limit: Int!) {
-    recentAcSubmissionList(username: $username, limit: $limit) {
+  query recentSubmissions($username: String!, $limit: Int!) {
+    recentSubmissionList(username: $username, limit: $limit) {
       id
       title
       titleSlug
       timestamp
+      statusDisplay
     }
   }
 `;
@@ -40,28 +40,16 @@ const PLACEHOLDER_USERNAMES = new Set([
 ]);
 
 /**
- * Resolves the LeetCode username from .env or runtime/session-meta.json.
+ * Resolves the LeetCode username from the environment.
  */
 function resolveUsername() {
-  const envUsername = config.leetcode.username?.trim();
+  const username = config.leetcode.username?.trim();
 
-  if (envUsername && !PLACEHOLDER_USERNAMES.has(envUsername.toLowerCase())) {
-    return envUsername;
+  if (!username || PLACEHOLDER_USERNAMES.has(username.toLowerCase())) {
+    return null;
   }
 
-  if (fs.existsSync(config.paths.sessionMeta)) {
-    try {
-      const meta = JSON.parse(fs.readFileSync(config.paths.sessionMeta, 'utf-8'));
-      const metaUsername = meta.username?.trim();
-      if (metaUsername && !PLACEHOLDER_USERNAMES.has(metaUsername.toLowerCase())) {
-        return metaUsername;
-      }
-    } catch (error) {
-      log(`[WARN] Could not read session metadata: ${error.message}`);
-    }
-  }
-
-  return null;
+  return username;
 }
 
 function sleep(ms) {
@@ -158,9 +146,36 @@ async function getDailyCodingChallenge() {
 }
 
 /**
- * Tri-state check for today's accepted submission:
- *   { status: 'SOLVED', submission }
- *   { status: 'UNSOLVED' }
+ * Returns the newest submission on or after the streak reset, or null.
+ * LeetCode's streak is activity-based: any submission counts, including
+ * Wrong Answer, TLE, MLE, and Runtime Error.
+ */
+function findTodaySubmission(submissions, resetTimestamp) {
+  if (!Array.isArray(submissions)) return null;
+
+  return (
+    submissions.find((submission) => parseInt(submission.timestamp, 10) >= resetTimestamp) ||
+    null
+  );
+}
+
+function normalizeSubmission(submission) {
+  const statusDisplay = submission.statusDisplay || 'Submitted';
+
+  return {
+    id: submission.id,
+    title: submission.title,
+    slug: submission.titleSlug,
+    timestamp: parseInt(submission.timestamp, 10),
+    statusDisplay,
+    accepted: statusDisplay === 'Accepted',
+  };
+}
+
+/**
+ * Tri-state check for today's streak activity:
+ *   { status: 'SAFE', submission }   - any submission today
+ *   { status: 'PENDING' }            - no submission today
  *   { status: 'ERROR', message }
  */
 async function checkSubmissionsToday() {
@@ -175,7 +190,7 @@ async function checkSubmissionsToday() {
 
   try {
     const data = await postGraphql(RECENT_SUBMISSIONS_QUERY, { username, limit: 20 });
-    const submissions = data?.recentAcSubmissionList;
+    const submissions = data?.recentSubmissionList;
 
     if (!Array.isArray(submissions)) {
       return {
@@ -185,25 +200,17 @@ async function checkSubmissionsToday() {
       };
     }
 
-    const resetTimestamp = getStreakResetTimestamp();
-    const todaySubmission = submissions.find(
-      (submission) => parseInt(submission.timestamp, 10) >= resetTimestamp
-    );
+    const todaySubmission = findTodaySubmission(submissions, getStreakResetTimestamp());
 
     if (todaySubmission) {
       return {
-        status: 'SOLVED',
+        status: 'SAFE',
         username,
-        submission: {
-          id: todaySubmission.id,
-          title: todaySubmission.title,
-          slug: todaySubmission.titleSlug,
-          timestamp: parseInt(todaySubmission.timestamp, 10),
-        },
+        submission: normalizeSubmission(todaySubmission),
       };
     }
 
-    return { status: 'UNSOLVED', username };
+    return { status: 'PENDING', username };
   } catch (error) {
     return {
       status: 'ERROR',
@@ -217,5 +224,7 @@ module.exports = {
   resolveUsername,
   getStreakResetTimestamp,
   getDailyCodingChallenge,
+  findTodaySubmission,
+  normalizeSubmission,
   checkSubmissionsToday,
 };

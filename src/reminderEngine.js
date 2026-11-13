@@ -113,8 +113,13 @@ function buildReminderMessage({ window, ist, dcc = null }) {
     }
 
     lines.push("📌 Today's LeetCode streak is pending");
-    lines.push(isMorning ? 'No accepted submission today.' : 'No accepted submission today, sir.');
+    lines.push(isMorning ? 'No submission today.' : 'No submission today, sir.');
     lines.push(`Time: ${time} | Reset in ${resetIn}`);
+
+    if (isMorning && dcc?.title) {
+      lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})`);
+      lines.push(dcc.link);
+    }
 
     return lines.join('\n');
   }
@@ -122,7 +127,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
   if (window === WINDOW.EVENING) {
     const lines = [
       "📌 Today's LeetCode streak is pending",
-      'No accepted submission today, sir.',
+      'No submission today, sir.',
       `Time: ${time} | Reset: 5:30 AM IST (in ${resetIn})`,
     ];
 
@@ -137,7 +142,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
   if (window === WINDOW.LATE_EVENING) {
     return [
       "⏰ Today's LeetCode streak is still pending",
-      'No accepted submission today, sir.',
+      'No submission today, sir.',
       `Time: ${time} | Reset in ${resetIn}`,
     ].join('\n');
   }
@@ -145,7 +150,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
   if (window === WINDOW.URGENT) {
     return [
       '⚠️ LeetCode streak expires soon',
-      'No accepted submission today.',
+      'No submission today.',
       `Time: ${time} | Reset in ${resetIn}`,
       'Solve any problem before 5:30 AM IST, sir.',
     ].join('\n');
@@ -153,7 +158,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
 
   return [
     '🚨 Final hours: LeetCode streak is pending',
-    'No accepted submission today.',
+    'No submission today.',
     `Time: ${time} | Reset in ${resetIn}`,
     'Solve any problem before 5:30 AM IST, sir.',
   ].join('\n');
@@ -254,7 +259,10 @@ async function processReminders({
   }
 
   let dcc = null;
-  if (window === WINDOW.EVENING) {
+  const wantsChallenge =
+    window === WINDOW.EVENING || (window === WINDOW.DAYTIME && ist.hour < 12);
+
+  if (wantsChallenge) {
     try {
       dcc = await fetchDcc();
     } catch {

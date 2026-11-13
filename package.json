@@ -6,9 +6,6 @@
   "scripts": {
     "start": "node src/index.js",
     "once": "node src/runOnce.js",
-    "login": "node src/scripts/login.js",
-    "test-auth": "node src/scripts/testAuth.js",
-    "test-submit": "node src/scripts/testSubmit.js",
     "test": "node test/guardian.test.js"
   },
   "keywords": [],
@@ -22,10 +19,5 @@
     "axios": "^1.13.6",
     "dotenv": "^17.3.1",
     "node-cron": "^4.2.1"
-  },
-  "devDependencies": {
-    "playwright": "^1.58.2",
-    "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
