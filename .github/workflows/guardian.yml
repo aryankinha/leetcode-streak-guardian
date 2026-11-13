@@ -2,9 +2,9 @@ name: LeetCode Streak Guardian
 
 on:
   schedule:
-    # Every 10 minutes from 12:00 to 23:50 UTC = 5:30 PM to 5:20 AM IST.
+    # Every 10 minutes from 04:00 to 23:50 UTC = 9:30 AM to 5:20 AM IST.
     # This covers the full reminder window and tolerates GitHub schedule delays.
-    - cron: '*/10 12-23 * * *'
+    - cron: '*/10 4-23 * * *'
 
   workflow_dispatch:
     inputs:

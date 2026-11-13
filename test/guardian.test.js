@@ -134,6 +134,12 @@ async function runTests() {
     });
 
     test('reminder window boundaries are correct', () => {
+      assert.strictEqual(reminderEngine.getReminderWindow(at(5, 30)), WINDOW.QUIET);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(9, 29)), WINDOW.QUIET);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(9, 30)), WINDOW.DAYTIME);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(12, 0)), WINDOW.DAYTIME);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(17, 29)), WINDOW.DAYTIME);
+      assert.strictEqual(reminderEngine.getReminderWindow(at(17, 30)), WINDOW.QUIET);
       assert.strictEqual(reminderEngine.getReminderWindow(at(17, 59)), WINDOW.QUIET);
       assert.strictEqual(reminderEngine.getReminderWindow(at(18, 0)), WINDOW.EVENING);
       assert.strictEqual(reminderEngine.getReminderWindow(at(19, 59)), WINDOW.EVENING);
@@ -144,11 +150,10 @@ async function runTests() {
       assert.strictEqual(reminderEngine.getReminderWindow(at(0, 59)), WINDOW.URGENT);
       assert.strictEqual(reminderEngine.getReminderWindow(at(1, 0)), WINDOW.CRITICAL);
       assert.strictEqual(reminderEngine.getReminderWindow(at(5, 29)), WINDOW.CRITICAL);
-      assert.strictEqual(reminderEngine.getReminderWindow(at(5, 30)), WINDOW.QUIET);
-      assert.strictEqual(reminderEngine.getReminderWindow(at(12, 0)), WINDOW.QUIET);
     });
 
     test('reminder intervals match the schedule', () => {
+      assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.DAYTIME), 60);
       assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.EVENING), null);
       assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.LATE_EVENING), 30);
       assert.strictEqual(reminderEngine.getReminderIntervalMinutes(WINDOW.URGENT), 15);
@@ -190,7 +195,7 @@ async function runTests() {
       assert(evening.includes('Two Sum'));
       assert(evening.includes('Reset: 5:30 AM IST'));
 
-      for (const window of [WINDOW.EVENING, WINDOW.LATE_EVENING, WINDOW.URGENT, WINDOW.CRITICAL]) {
+      for (const window of [WINDOW.DAYTIME, WINDOW.EVENING, WINDOW.LATE_EVENING, WINDOW.URGENT, WINDOW.CRITICAL]) {
         const message = reminderEngine.buildReminderMessage({ window, ist, dcc: null });
         assert(!message.includes('*'), `${window} message contains markdown asterisks`);
       }
@@ -269,6 +274,29 @@ async function runTests() {
       assert.strictEqual(messages.length, 1);
     });
 
+    await testAsync('daytime reminders respect the 60-minute interval', async () => {
+      writeState({
+        lastAlertTime: new Date('2026-11-13T04:30:00Z').getTime(), // 10:00 AM IST
+      });
+      const { messages, send } = collector();
+
+      const early = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T05:00:00Z'), // 10:30 AM IST
+        send,
+      });
+      assert.strictEqual(early.sent, false);
+
+      const later = await reminderEngine.processReminders({
+        now: new Date('2026-11-13T05:31:00Z'), // 11:01 AM IST
+        send,
+      });
+      assert.strictEqual(later.sent, true);
+      assert.strictEqual(later.window, WINDOW.DAYTIME);
+      assert.strictEqual(messages.length, 1);
+      assert(messages[0].includes("Today's LeetCode streak is pending"));
+      assert(messages[0].includes('11:01 AM IST'));
+    });
+
     await testAsync('late-evening reminders respect the 30-minute interval', async () => {
       writeState({
         firstReminderSentDay: '2026-11-13',
@@ -319,7 +347,7 @@ async function runTests() {
       const { messages, send } = collector();
 
       const result = await reminderEngine.processReminders({
-        now: new Date('2026-11-13T06:30:00Z'), // 12:00 IST
+        now: new Date('2026-11-13T02:00:00Z'), // 07:30 IST
         send,
       });
 

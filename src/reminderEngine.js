@@ -9,6 +9,7 @@ const IST_TIME_ZONE = 'Asia/Kolkata';
 
 const WINDOW = {
   QUIET: 'quiet',
+  DAYTIME: 'daytime',
   EVENING: 'evening',
   LATE_EVENING: 'late-evening',
   URGENT: 'urgent',
@@ -55,6 +56,7 @@ function getLeetCodeStreakDay(date = new Date()) {
 }
 
 function getReminderWindow(totalMinutes) {
+  if (totalMinutes >= 9 * 60 + 30 && totalMinutes < 17 * 60 + 30) return WINDOW.DAYTIME;
   if (totalMinutes >= 18 * 60 && totalMinutes < 20 * 60) return WINDOW.EVENING;
   if (totalMinutes >= 20 * 60 && totalMinutes < 22 * 60) return WINDOW.LATE_EVENING;
   if (totalMinutes >= 22 * 60 || totalMinutes < 60) return WINDOW.URGENT;
@@ -64,6 +66,8 @@ function getReminderWindow(totalMinutes) {
 
 function getReminderIntervalMinutes(window) {
   switch (window) {
+    case WINDOW.DAYTIME:
+      return 60;
     case WINDOW.LATE_EVENING:
       return 30;
     case WINDOW.URGENT:
@@ -99,6 +103,14 @@ function formatIstTime(ist) {
 function buildReminderMessage({ window, ist, dcc = null }) {
   const time = formatIstTime(ist);
   const resetIn = formatDuration(getMinutesUntilReset(ist));
+
+  if (window === WINDOW.DAYTIME) {
+    return [
+      "📌 Today's LeetCode streak is pending",
+      'No accepted submission today.',
+      `Time: ${time} | Reset in ${resetIn}`,
+    ].join('\n');
+  }
 
   if (window === WINDOW.EVENING) {
     const lines = [
@@ -206,8 +218,8 @@ function saveState(state) {
 
 /**
  * Sends at most one reminder per configured interval, only inside the
- * evening-to-reset window. State is advanced only after Telegram accepts
- * the message, so a failed send is retried on the next run.
+ * 9:30 AM to 5:30 AM IST window. State is advanced only after Telegram
+ * accepts the message, so a failed send is retried on the next run.
  */
 async function processReminders({
   now = new Date(),
@@ -230,7 +242,7 @@ async function processReminders({
     : now.getTime() - state.lastAlertTime >= intervalMinutes * 60 * 1000;
 
   if (!shouldSend) {
-    log(`[INFO] Reminder already sent for this window (${formatIstTime(ist)}).`);
+    log(`[INFO] Reminder not due yet (${formatIstTime(ist)}).`);
     return { sent: false, window };
   }
 

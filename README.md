@@ -1,11 +1,11 @@
 # LeetCode Streak Guardian
 
-Checks your LeetCode submissions every 10 minutes during the evening and overnight, then sends short Telegram reminders until you solve a problem. No auto-submit.
+Checks your LeetCode submissions every 10 minutes from morning to just before the streak reset, then sends short Telegram reminders until you solve a problem. No auto-submit.
 
 ## How it works
 
 ```text
-GitHub Actions (every 10 min, 5:30 PM - 5:20 AM IST)
+GitHub Actions (every 10 min, 9:30 AM - 5:20 AM IST)
   -> check recent accepted submissions
   -> solved? exit
   -> not solved? send the next reminder for the current time window
@@ -17,11 +17,13 @@ LeetCode resets the daily streak at **05:30 AM IST** (00:00 UTC). The bot stops 
 
 | Time | Behaviour |
 | --- | --- |
+| 9:30 AM - 5:30 PM | Every 60 minutes |
+| 5:30 PM - 6:00 PM | Quiet |
 | 6:00 PM - 8:00 PM | One reminder, with today's daily challenge link |
 | 8:00 PM - 10:00 PM | Every 30 minutes |
 | 10:00 PM - 1:00 AM | Every 15 minutes |
 | 1:00 AM - 5:30 AM | Every 10 minutes |
-| 5:30 AM - 6:00 PM | Quiet |
+| 5:30 AM - 9:30 AM | Quiet |
 
 A "streak safe" message is sent once if you solve after receiving a reminder.
 
@@ -77,7 +79,7 @@ npm test       # test suite
 
 ## GitHub Actions
 
-The workflow runs `*/10 12-23 * * *` UTC, which is **5:30 PM to 5:20 AM IST** — the full reminder window, with no wasted runs during the day. Frequent runs also survive GitHub's scheduled-job delays.
+The workflow runs `*/10 4-23 * * *` UTC, which is **9:30 AM to 5:20 AM IST** — the full reminder window, with no wasted runs overnight. Frequent runs also survive GitHub's scheduled-job delays.
 
 You can trigger a test message manually:
 

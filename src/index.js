@@ -40,7 +40,7 @@ log('LeetCode Streak Guardian (reminders only)');
 log(`User: ${username}`);
 log(`Interval: every ${interval} minutes`);
 log(`Time: ${formatIstTime(ist)}`);
-log('Reminder window: 6:00 PM to 5:30 AM IST');
+log('Reminder window: 9:30 AM to 5:30 AM IST');
 log('======================================================');
 
 main();
