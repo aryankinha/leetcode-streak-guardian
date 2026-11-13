@@ -201,12 +201,33 @@ async function runTests() {
       }
     });
 
+    test('morning reminders greet you, afternoon reminders stay brief', () => {
+      const morning = reminderEngine.getISTParts(new Date('2026-11-13T04:30:00Z')); // 10:00 IST
+      const morningMessage = reminderEngine.buildReminderMessage({
+        window: WINDOW.DAYTIME,
+        ist: morning,
+      });
+
+      assert(morningMessage.startsWith('Good morning, sir,'));
+      assert(morningMessage.includes('No accepted submission today.'));
+      assert(!morningMessage.includes('today, sir'));
+
+      const afternoon = reminderEngine.getISTParts(new Date('2026-11-13T09:30:00Z')); // 15:00 IST
+      const afternoonMessage = reminderEngine.buildReminderMessage({
+        window: WINDOW.DAYTIME,
+        ist: afternoon,
+      });
+
+      assert(!afternoonMessage.includes('Good morning'));
+      assert(afternoonMessage.includes('No accepted submission today, sir.'));
+    });
+
     test('critical message shows the final-hours warning', () => {
       const ist = reminderEngine.getISTParts(new Date('2026-11-13T21:15:00Z')); // 02:45 IST
       const message = reminderEngine.buildReminderMessage({ window: WINDOW.CRITICAL, ist });
       assert(message.includes('Final hours'));
       assert(message.includes('Reset in 2h 45m'));
-      assert(message.includes('Solve any problem before 5:30 AM IST.'));
+      assert(message.includes('Solve any problem before 5:30 AM IST, sir.'));
     });
 
     console.log('\n--- State handling ---');

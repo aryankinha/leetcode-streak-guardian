@@ -29,11 +29,18 @@ A "streak safe" message is sent once if you solve after receiving a reminder.
 
 ## Message format
 
-Messages are plain text and contain only the current status, time, and reset countdown. Example:
+Messages are plain text and contain only the current status, time, and reset countdown. Morning reminders start with a greeting, and reminders address you once as "sir". Examples:
+
+```text
+Good morning, sir,
+📌 Today's LeetCode streak is pending
+No accepted submission today.
+Time: 9:30 AM IST | Reset in 20h 00m
+```
 
 ```text
 📌 Today's LeetCode streak is pending
-No accepted submission today.
+No accepted submission today, sir.
 Time: 6:15 PM IST | Reset: 5:30 AM IST (in 11h 15m)
 Challenge: Climbing Stairs II (Medium)
 https://leetcode.com/problems/climbing-stairs-ii/

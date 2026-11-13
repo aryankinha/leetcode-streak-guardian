@@ -51,7 +51,7 @@ async function notifyStreakSafe(submission) {
 
   const title = submission?.title || 'Accepted submission';
   const sent = await sendMessage(
-    `✅ LeetCode streak safe\nAccepted: ${title}\nDate: ${streakDay}`
+    `✅ LeetCode streak safe\nAccepted: ${title}\nDate: ${streakDay}\nWell done, sir.`
   );
 
   if (sent) {

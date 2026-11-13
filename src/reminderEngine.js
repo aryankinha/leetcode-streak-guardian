@@ -105,17 +105,24 @@ function buildReminderMessage({ window, ist, dcc = null }) {
   const resetIn = formatDuration(getMinutesUntilReset(ist));
 
   if (window === WINDOW.DAYTIME) {
-    return [
-      "📌 Today's LeetCode streak is pending",
-      'No accepted submission today.',
-      `Time: ${time} | Reset in ${resetIn}`,
-    ].join('\n');
+    const isMorning = ist.hour < 12;
+    const lines = [];
+
+    if (isMorning) {
+      lines.push('Good morning, sir,');
+    }
+
+    lines.push("📌 Today's LeetCode streak is pending");
+    lines.push(isMorning ? 'No accepted submission today.' : 'No accepted submission today, sir.');
+    lines.push(`Time: ${time} | Reset in ${resetIn}`);
+
+    return lines.join('\n');
   }
 
   if (window === WINDOW.EVENING) {
     const lines = [
       "📌 Today's LeetCode streak is pending",
-      'No accepted submission today.',
+      'No accepted submission today, sir.',
       `Time: ${time} | Reset: 5:30 AM IST (in ${resetIn})`,
     ];
 
@@ -130,7 +137,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
   if (window === WINDOW.LATE_EVENING) {
     return [
       "⏰ Today's LeetCode streak is still pending",
-      'No accepted submission today.',
+      'No accepted submission today, sir.',
       `Time: ${time} | Reset in ${resetIn}`,
     ].join('\n');
   }
@@ -140,7 +147,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
       '⚠️ LeetCode streak expires soon',
       'No accepted submission today.',
       `Time: ${time} | Reset in ${resetIn}`,
-      'Solve any problem before 5:30 AM IST.',
+      'Solve any problem before 5:30 AM IST, sir.',
     ].join('\n');
   }
 
@@ -148,7 +155,7 @@ function buildReminderMessage({ window, ist, dcc = null }) {
     '🚨 Final hours: LeetCode streak is pending',
     'No accepted submission today.',
     `Time: ${time} | Reset in ${resetIn}`,
-    'Solve any problem before 5:30 AM IST.',
+    'Solve any problem before 5:30 AM IST, sir.',
   ].join('\n');
 }
 
