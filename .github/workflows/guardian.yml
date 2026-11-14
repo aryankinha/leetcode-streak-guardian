@@ -1,11 +1,10 @@
 name: LeetCode Streak Guardian
 
 on:
-  schedule:
-    # Every 10 minutes from 04:00 to 23:50 UTC = 9:30 AM to 5:20 AM IST.
-    # This covers the full reminder window and tolerates GitHub schedule delays.
-    - cron: '*/10 4-23 * * *'
-
+  # Scheduling lives in scheduler/ (Cloudflare Worker, every 10 minutes from
+  # 04:00 to 23:50 UTC). GitHub's `schedule` trigger was removed because it
+  # delays and drops runs under load, and public repositories auto-disable
+  # scheduled workflows after 60 days without activity.
   workflow_dispatch:
     inputs:
       test_alert:

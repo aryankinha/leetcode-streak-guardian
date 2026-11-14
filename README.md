@@ -5,11 +5,15 @@ Checks whether you have submitted anything on LeetCode every 10 minutes from mor
 ## How it works
 
 ```text
-GitHub Actions (every 10 min, 9:30 AM - 5:20 AM IST)
+Cloudflare Worker cron (every 10 min, 9:30 AM - 5:20 AM IST)
+  -> start the GitHub Actions workflow
   -> check today's submissions (any status counts)
   -> submitted? exit
   -> not yet? send the next reminder for the current time window
 ```
+
+GitHub's own `schedule` trigger is intentionally not used: it delays and drops
+runs under load. The Cloudflare Worker in `scheduler/` is the only scheduler.
 
 LeetCode resets the daily streak at **05:30 AM IST** (00:00 UTC). The bot stops reminding after that.
 
@@ -97,19 +101,122 @@ npm run once   # one cycle only
 npm test       # test suite
 ```
 
-## GitHub Actions
+## Scheduler setup (Cloudflare Workers)
 
-The workflow runs `*/10 4-23 * * *` UTC, which is **9:30 AM to 5:20 AM IST** — the full reminder window, with no wasted runs overnight. Frequent runs also survive GitHub's scheduled-job delays.
+The scheduler is a tiny Worker with one Cron Trigger. Every 10 minutes it sends
+`POST /repos/{owner}/{repo}/actions/workflows/guardian.yml/dispatches`, which
+starts the workflow. It needs no database and uses about 144 invocations per
+day out of the free tier's 100,000.
 
-You can trigger a test message manually:
+### 1. Create the GitHub token
+
+1. GitHub -> **Settings -> Developer settings -> Personal access tokens ->
+   Fine-grained tokens -> Generate new token**.
+2. **Repository access:** Only select repositories -> `leetcode-streak-guardian`.
+3. **Repository permissions -> Actions:** Read and write. Leave everything else
+   at "No access".
+4. Set an expiry (one year is the maximum) and copy the token.
+
+The token can only start workflows; it cannot read your code or secrets. When
+it expires, run `npx wrangler secret put GITHUB_TOKEN` again with a new one.
+
+### 2. Log in and deploy
+
+```bash
+cd scheduler
+npm install
+npx wrangler login
+```
+
+`wrangler login` opens a browser tab. Sign in to Cloudflare (the free plan is
+enough) and approve the request. If the browser cannot be opened, create an API
+token from **My Profile -> API Tokens -> Create Token -> Edit Cloudflare
+Workers**, then prefix the deploy commands with `CLOUDFLARE_API_TOKEN=<token>`.
+
+Then deploy and store the GitHub token as an encrypted Worker secret:
+
+```bash
+npx wrangler deploy
+npx wrangler secret put GITHUB_TOKEN
+```
+
+Paste the fine-grained token when prompted. The secret is never written to disk.
+
+> Run `wrangler deploy` before `secret put` so the Worker exists. A cron tick
+> between the two commands logs a "missing GITHUB_TOKEN" error and does nothing
+> else.
+
+### 3. Verify
+
+```bash
+npx wrangler tail
+```
+
+Wait for the next 10-minute tick. A successful line looks like:
+
+```text
+Dispatched aryankinha/leetcode-streak-guardian guardian.yml@main (cron "*/10 4-23 * * *", ...)
+```
+
+The repository **Actions** tab should show a matching `workflow_dispatch` run.
+Opening the Worker's `workers.dev` URL returns a small JSON health response and
+starts nothing.
+
+To test the full path immediately, run the workflow manually. This is the same
+request the Worker makes:
 
 ```bash
 gh workflow run guardian.yml -f test_alert=true
 ```
 
-### Keep the workflow enabled
+### 4. Change the schedule or repository
 
-GitHub disables scheduled workflows in public repositories after **60 days without a push**. Push any commit at least once every two months, or move the scheduler to a small always-on host if you want zero maintenance.
+Edit `scheduler/wrangler.jsonc`:
+
+- `triggers.crons` is in UTC. `*/10 4-23 * * *` is 9:30 AM to 5:20 AM IST.
+- `vars.GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_WORKFLOW`, and `GITHUB_REF` point
+  at this repository.
+
+Run `npx wrangler deploy` again afterwards. Cron changes can take up to 15
+minutes to propagate.
+
+### Local testing (optional)
+
+```bash
+cd scheduler
+npm test                 # unit tests, no network
+npm run check            # validate the bundle without deploying
+npx wrangler dev --test-scheduled
+```
+
+With the dev server running:
+
+```bash
+curl "http://localhost:8787/__scheduled?cron=*/10+4-23+*+*+*"
+```
+
+This calls the real GitHub API, so it needs `GITHUB_TOKEN` in
+`scheduler/.dev.vars` and starts a real workflow run.
+
+To stop the scheduler, run `npx wrangler delete` inside `scheduler/`.
+
+## GitHub Actions
+
+The workflow is **dispatch-only** (`workflow_dispatch`). The Cloudflare Worker
+starts it every 10 minutes from 04:00 to 23:50 UTC (**9:30 AM to 5:20 AM IST**),
+matching the reminder window.
+
+This avoids two GitHub behaviours: scheduled runs are delayed or dropped under
+load, and scheduled workflows in public repositories are disabled after 60 days
+without repository activity. A dispatch-only workflow is not affected by the
+60-day rule.
+
+You can trigger a run, or a test message, manually at any time:
+
+```bash
+gh workflow run guardian.yml
+gh workflow run guardian.yml -f test_alert=true
+```
 
 ## State
 
@@ -130,4 +237,8 @@ src/
   logger.js
 test/
   guardian.test.js
+scheduler/
+  wrangler.jsonc     Cloudflare cron trigger + repository vars
+  src/index.js       dispatches the GitHub Actions workflow
+  test/index.test.js
 ```
