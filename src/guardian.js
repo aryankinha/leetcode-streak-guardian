@@ -1,10 +1,11 @@
-const { checkSubmissionsToday } = require('./leetcodeApi');
+const { checkSubmissionsToday, getDailyCodingChallenge } = require('./leetcodeApi');
 const {
   loadState,
   saveState,
   getLeetCodeStreakDay,
   getISTParts,
   formatIstTime,
+  buildRecommendationLines,
   processReminders,
 } = require('./reminderEngine');
 const { sendMessage } = require('./telegramNotifier');
@@ -95,23 +96,39 @@ async function notifyStreakSafe(submission) {
 async function sendTestAlert() {
   const ist = getISTParts();
   const result = await checkSubmissionsToday();
+  const [dcc, recommendation] = await Promise.all([
+    getDailyCodingChallenge().catch(() => null),
+    getDailyRecommendation().catch(() => null),
+  ]);
+
+  const lines = [];
 
   if (result.status === 'SAFE') {
     const submission = result.submission;
-    const detail = submission?.accepted
-      ? `Accepted: ${submission.title}`
-      : `Submitted: ${submission?.title || 'unknown'} (${submission?.statusDisplay || 'not accepted'})`;
-
-    return sendMessage(`✅ Test alert: today's LeetCode streak is safe\n${detail}`);
-  }
-
-  if (result.status === 'PENDING') {
-    return sendMessage(
-      `📌 Test alert: today's LeetCode streak is pending\nNo submission today.\nTime: ${formatIstTime(ist)}`
+    lines.push("✅ Test alert: today's LeetCode streak is safe");
+    lines.push(
+      submission?.accepted
+        ? `Accepted: ${submission.title}`
+        : `Submitted: ${submission?.title || 'unknown'} (${submission?.statusDisplay || 'not accepted'})`
     );
+  } else if (result.status === 'PENDING') {
+    lines.push("📌 Test alert: today's LeetCode streak is pending");
+    lines.push('No submission today.');
+    lines.push(`Time: ${formatIstTime(ist)}`);
+  } else {
+    lines.push('⚠️ Test alert: LeetCode check failed');
+    lines.push(`Reason: ${result.message}`);
   }
 
-  return sendMessage(`⚠️ Test alert: LeetCode check failed\nReason: ${result.message}`);
+  if (dcc?.title) {
+    const suffix =
+      dcc.status === 'ac' ? ' — solved' : dcc.status === 'notac' ? ' — attempted' : '';
+    lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})${suffix}`);
+    lines.push(dcc.link);
+  }
+
+  lines.push(...buildRecommendationLines(recommendation));
+  return sendMessage(lines.join('\n'));
 }
 
 async function runGuardianCycle({ testAlert = false } = {}) {
