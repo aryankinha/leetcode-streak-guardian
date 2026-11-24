@@ -38,7 +38,9 @@ function loadStore() {
   if (!fs.existsSync(filePath)) return defaultStore();
 
   try {
-    return normalizeStore(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    if (!raw.trim()) return defaultStore();
+    return normalizeStore(JSON.parse(raw));
   } catch (error) {
     log(`[WARN] Could not read recommendation cache; starting fresh: ${error.message}`);
     return defaultStore();

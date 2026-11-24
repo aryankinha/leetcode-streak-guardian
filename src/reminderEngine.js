@@ -213,7 +213,16 @@ function loadState(now = new Date()) {
   }
 
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    const raw = fs.readFileSync(filePath, 'utf-8');
+
+    // The workflow touches this file before the first run so the cache action
+    // has a path to save. An empty file means "no state yet", not a corruption.
+    if (!raw.trim()) {
+      saveState(defaultState);
+      return defaultState;
+    }
+
+    const parsed = JSON.parse(raw);
     const state = { ...defaultState, ...parsed };
 
     // Older versions stored auto-submit fields. They are no longer used.
