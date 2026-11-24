@@ -100,7 +100,25 @@ function formatIstTime(ist) {
   return `${hour12}:${String(ist.minute).padStart(2, '0')} ${suffix} IST`;
 }
 
-function buildReminderMessage({ window, ist, dcc = null }) {
+function dailyStatusSuffix(dcc) {
+  if (dcc?.status === 'ac') return ' — solved';
+  if (dcc?.status === 'notac') return ' — attempted';
+  return '';
+}
+
+/**
+ * Two compact lines for the recommended problem. Kept out of urgent/critical
+ * reminders so those stay short and action-focused.
+ */
+function buildRecommendationLines(recommendation) {
+  const rec = recommendation?.recommendation;
+  if (!rec) return [];
+  // The recommendation can be today's challenge itself; do not repeat it.
+  if (recommendation.daily && recommendation.daily.slug === rec.slug) return [];
+  return [`🎯 Next: ${rec.title} (${rec.difficulty})`, rec.url];
+}
+
+function buildReminderMessage({ window, ist, dcc = null, recommendation = null }) {
   const time = formatIstTime(ist);
   const resetIn = formatDuration(getMinutesUntilReset(ist));
 
@@ -117,8 +135,12 @@ function buildReminderMessage({ window, ist, dcc = null }) {
     lines.push(`Time: ${time} | Reset in ${resetIn}`);
 
     if (isMorning && dcc?.title) {
-      lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})`);
+      lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})${dailyStatusSuffix(dcc)}`);
       lines.push(dcc.link);
+    }
+
+    if (isMorning) {
+      lines.push(...buildRecommendationLines(recommendation));
     }
 
     return lines.join('\n');
@@ -132,9 +154,11 @@ function buildReminderMessage({ window, ist, dcc = null }) {
     ];
 
     if (dcc?.title) {
-      lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})`);
+      lines.push(`Challenge: ${dcc.title} (${dcc.difficulty})${dailyStatusSuffix(dcc)}`);
       lines.push(dcc.link);
     }
+
+    lines.push(...buildRecommendationLines(recommendation));
 
     return lines.join('\n');
   }
@@ -237,6 +261,7 @@ async function processReminders({
   now = new Date(),
   send = sendMessage,
   fetchDcc = getDailyCodingChallenge,
+  fetchRecommendation = null,
 } = {}) {
   const ist = getISTParts(now);
   const streakDay = getLeetCodeStreakDay(now);
@@ -259,18 +284,30 @@ async function processReminders({
   }
 
   let dcc = null;
+  let recommendation = null;
   const wantsChallenge =
     window === WINDOW.EVENING || (window === WINDOW.DAYTIME && ist.hour < 12);
 
   if (wantsChallenge) {
-    try {
-      dcc = await fetchDcc();
-    } catch {
-      dcc = null;
-    }
+    const [dccResult, recommendationResult] = await Promise.all([
+      Promise.resolve()
+        .then(() => fetchDcc())
+        .catch(() => null),
+      typeof fetchRecommendation === 'function'
+        ? Promise.resolve()
+            .then(() => fetchRecommendation())
+            .catch((error) => {
+              log(`[WARN] Recommendation unavailable: ${error.message}`);
+              return null;
+            })
+        : Promise.resolve(null),
+    ]);
+
+    dcc = dccResult;
+    recommendation = recommendationResult;
   }
 
-  const message = buildReminderMessage({ window, ist, dcc });
+  const message = buildReminderMessage({ window, ist, dcc, recommendation });
   const sent = await send(message);
 
   if (!sent) {
@@ -300,6 +337,7 @@ module.exports = {
   getMinutesUntilReset,
   formatDuration,
   formatIstTime,
+  buildRecommendationLines,
   buildReminderMessage,
   loadState,
   saveState,

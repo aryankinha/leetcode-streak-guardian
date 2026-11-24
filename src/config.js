@@ -23,6 +23,10 @@ module.exports = {
   leetcode: {
     username: process.env.LEETCODE_USERNAME,
     graphqlUrl: 'https://leetcode.com/graphql',
+    // Optional. Needed to verify per-problem status (solved / attempted /
+    // never attempted). Without it, recommendations are marked unverified.
+    session: process.env.LEETCODE_SESSION,
+    csrfToken: process.env.LEETCODE_CSRFTOKEN,
   },
   telegram: {
     token: process.env.TELEGRAM_BOT_TOKEN,
@@ -33,6 +37,7 @@ module.exports = {
     runtimeDir,
     logsDir,
     runtimeState: path.join(runtimeDir, 'state.json'),
+    runtimeRecommendation: path.join(runtimeDir, 'recommendation.json'),
     logs: path.join(logsDir, 'app.log'),
   },
 };

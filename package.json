@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "once": "node src/runOnce.js",
-    "test": "node test/guardian.test.js"
+    "recommend": "node src/recommend.js",
+    "test": "node test/guardian.test.js && node test/recommender.test.js"
   },
   "keywords": [],
   "author": "",

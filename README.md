@@ -1,6 +1,6 @@
 # LeetCode Streak Guardian
 
-Checks whether you have submitted anything on LeetCode every 10 minutes from morning to just before the streak reset, then sends short Telegram reminders until you do. No login, no auto-submit.
+Checks whether you have submitted anything on LeetCode every 10 minutes from morning to just before the streak reset, sends short Telegram reminders until you do, and recommends **one** next problem based on your solved-problem coverage. No auto-submit.
 
 ## How it works
 
@@ -10,6 +10,7 @@ Cloudflare Worker cron (every 10 min, 9:30 AM - 5:20 AM IST)
   -> check today's submissions (any status counts)
   -> submitted? exit
   -> not yet? send the next reminder for the current time window
+       morning/evening: today's challenge + one recommendation
 ```
 
 GitHub's own `schedule` trigger is intentionally not used: it delays and drops
@@ -37,7 +38,7 @@ A "streak safe" message is sent once if you submit after receiving a reminder.
 
 ## Message format
 
-Messages are plain text and contain only the current status, time, and reset countdown. Morning reminders start with a greeting, and reminders address you once as "sir". Examples:
+Messages are plain text and keep to the current status, time, reset countdown, the daily challenge, and at most one recommendation. Morning reminders start with a greeting, and reminders address you once as "sir". Examples:
 
 ```text
 Good morning, sir,
@@ -46,6 +47,8 @@ No submission today.
 Time: 9:30 AM IST | Reset in 20h 00m
 Challenge: Climbing Stairs II (Medium)
 https://leetcode.com/problems/climbing-stairs-ii/
+🎯 Next: Reorganize String (Medium)
+https://leetcode.com/problems/reorganize-string/
 ```
 
 ```text
@@ -54,6 +57,8 @@ No submission today, sir.
 Time: 6:15 PM IST | Reset: 5:30 AM IST (in 11h 15m)
 Challenge: Climbing Stairs II (Medium)
 https://leetcode.com/problems/climbing-stairs-ii/
+🎯 Next: Reorganize String (Medium)
+https://leetcode.com/problems/reorganize-string/
 ```
 
 ```text
@@ -62,6 +67,68 @@ Submitted: Climbing Stairs II (Wrong Answer)
 Date: 2026-11-14
 Streak secured, sir.
 ```
+
+## Recommendations
+
+The morning and evening reminders include one recommended problem. The engine
+scores a curated pool in `src/problemCatalog.js` against your profile:
+
+- **Topic coverage** — solved / total for each tagged topic. Core topics
+  (graph, DP, heap, sliding window) weigh more than narrow tags like design.
+- **Difficulty fit** — Medium is the target; Easy is a small step down and Hard
+  is only chosen when the topic gap is large.
+- **Status** — solved problems are always excluded. Attempted-but-unsolved
+  problems are labelled as a retry and preferred slightly less than new ones.
+- **Momentum** — problems that share tags with your last few accepted
+  submissions get a small boost, so the next step continues your current track.
+- **Daily challenge** — today's challenge is added as a candidate. It gets a
+  bonus only when the session confirms it is unsolved.
+- **Variety** — a problem recommended in the last 10 days is skipped.
+
+The result is cached in `runtime/recommendation.json` for six hours, so the
+morning and evening messages agree and the bot does not hammer LeetCode.
+
+### Run it directly
+
+```bash
+npm run recommend
+npm run recommend -- --json      # raw result
+npm run recommend -- --refresh   # ignore today's cache
+npm run recommend -- --dry-run   # do not write the cache
+```
+
+### Verified status (optional but recommended)
+
+Without a session, the engine can still read your public solved counts and
+recent submissions, but it cannot prove which problems you already solved. It
+then uses a bundled solved-count snapshot and marks the result **unverified**.
+
+To verify status, copy two values from a signed-in `leetcode.com` browser
+session into `.env` (or GitHub Actions secrets):
+
+1. Open DevTools → **Application** → **Cookies** → `https://leetcode.com`.
+2. Copy `LEETCODE_SESSION` and `csrftoken`.
+3. Set them as `LEETCODE_SESSION` and `LEETCODE_CSRFTOKEN`.
+
+The session grants access to your LeetCode account. Treat it like a password,
+set an expiry reminder, and rotate it when it expires (roughly every two weeks).
+Recommendations fall back to unverified mode automatically when it expires.
+
+### How the score is computed
+
+```text
+score = 0.9 * topic_need * topic_importance
+      + 0.25 * secondary_topic_need
+      + difficulty_fit
+      + status_bonus
+      + momentum_bonus
+      + daily_bonus
+      - repeat_penalty
+```
+
+`topic_need` is `1 - solved/total`. The highest score wins; ties fall back to
+the catalog's curated priority. The engine is deterministic, so the same
+profile and day always produce the same recommendation.
 
 ## Setup
 
@@ -81,6 +148,8 @@ Copy `.env.example` to `.env` and set:
 LEETCODE_USERNAME=your_leetcode_username
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
+LEETCODE_SESSION=optional_for_verified_recommendations
+LEETCODE_CSRFTOKEN=optional_for_verified_recommendations
 ```
 
 ### 3. GitHub Actions secrets
@@ -90,8 +159,11 @@ In the repository, go to **Settings -> Secrets and variables -> Actions** and ad
 - `LEETCODE_USERNAME` (repository variable or secret)
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
+- `LEETCODE_SESSION` (optional, for verified recommendations)
+- `LEETCODE_CSRFTOKEN` (optional, for verified recommendations)
 
-No LeetCode session or password is needed for reminders.
+Without the session secrets the bot still works; recommendations are marked
+unverified and use a bundled topic snapshot.
 
 ### 4. Run
 
@@ -220,25 +292,39 @@ gh workflow run guardian.yml -f test_alert=true
 
 ## State
 
-Reminder state is stored in `runtime/state.json` and restored between GitHub Actions runs with the Actions cache. It contains only reminder timestamps; no credentials are cached.
+Two files live in `runtime/` and are restored between GitHub Actions runs with
+the Actions cache:
+
+- `state.json` — reminder timestamps for the current streak day.
+- `recommendation.json` — today's cached recommendation plus the last 30 picks,
+  used to avoid repeats.
+
+Neither file contains credentials. The LeetCode session is read from the
+environment and is never written to disk or cached.
 
 ## Project structure
 
 ```text
 src/
-  index.js           local cron entry point
-  runOnce.js         GitHub Actions / one-shot entry point
-  guardian.js        check submissions + decide whether to notify
-  reminderEngine.js  IST windows, state, message text
-  leetcodeApi.js     LeetCode GraphQL client
+  index.js                 local cron entry point
+  runOnce.js               GitHub Actions / one-shot entry point
+  guardian.js              check submissions + decide whether to notify
+  reminderEngine.js        IST windows, state, message text
+  leetcodeApi.js           LeetCode GraphQL client (public + optional session)
+  recommender.js           topic scoring and the single next recommendation
+  problemCatalog.js        curated, non-premium recommendation pool
+  recommendationStore.js   cache and repeat-avoidance history
+  recommendationService.js daily cache wrapper
+  recommend.js             `npm run recommend` CLI
   telegramNotifier.js
   constants.js
   config.js
   logger.js
 test/
-  guardian.test.js
+  guardian.test.js         reminders, windows, API helpers
+  recommender.test.js      scoring, dedupe, daily integration, cache
 scheduler/
-  wrangler.jsonc     Cloudflare cron trigger + repository vars
-  src/index.js       dispatches the GitHub Actions workflow
+  wrangler.jsonc           Cloudflare cron trigger + repository vars
+  src/index.js             dispatches the GitHub Actions workflow
   test/index.test.js
 ```

@@ -8,6 +8,7 @@ const {
   processReminders,
 } = require('./reminderEngine');
 const { sendMessage } = require('./telegramNotifier');
+const { getDailyRecommendation } = require('./recommendationService');
 const { log } = require('./logger');
 
 const ERROR_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
@@ -138,7 +139,9 @@ async function runGuardianCycle({ testAlert = false } = {}) {
     }
 
     log('[INFO] No submission today. Checking the reminder window...');
-    const reminder = await processReminders();
+    const reminder = await processReminders({
+      fetchRecommendation: () => getDailyRecommendation(),
+    });
     return { ok: true, status: 'PENDING', reminder };
   } catch (error) {
     log(`[ERROR] Guardian cycle failed: ${error.message}`);
